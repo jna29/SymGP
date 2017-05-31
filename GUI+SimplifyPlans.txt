@@ -1,0 +1,53 @@
+Reasons for simplifying:
+	- Obtaining more intuitive and self-explanatory expressions
+	- Obtaining computationally efficient expressions
+
+Different forms to convert:
+	- E + FGF' -> S   (Convert to a single symbol)
+	- (E - FH^{-1}G)^{-1} ->  E^{-1} + E^{-1}F(H - GE^{-1}F)^{-1}GE^{-1}   (Matrix Inv lemma)
+	- (E - FH^{-1}G)^{-1}FH^{-1} -> E^{-1}F(H - GE^{-1}F)^{-1}   (Matrix inv lemma)
+	- AFA' -> S   (Simplify symmetric matrix)
+	- Ax + b -> s  (convert to a single vector)
+	- a + b -> s  (convert summation or subtraction to a vector)
+
+	K_*u(K_uu^-1 - K_uu^-1*K_uf*(K_fu*K_uu^-1*K_uf + s_y^2*I)^{-1}*K_fu*K_uu^{-1})K_u*
+KF posterior p(xt|y_{1:t}):
+	- Mean
+		- Turn to Am_{t-1|t-1} + b_t -> \mu_{t|t-1} and Q + AP_{t-1|t-1}A' -> \Sigma_{t|t-1}. 
+		  (\mu_{t|t-1} + \Sigma_{t|t-1}C'(R + C\Sigma_{t|t-1}C')^{-1}(y_t - (C\mu_{t|t-1} + d_t)))
+		- Turn R + C\Sigma_{t|t-1}C' -> S_t (\mu_{t|t-1} + \Sigma_{t|t-1}C'S_t^{-1}(y_t - (C\mu_{t|t-1} + d_t)))
+		- Turn \Sigma_{t|t-1}C'S_t^{-1} -> K_t and y_t - (C\mu_{t|t-1} + d_t) -> r_t  (\mu_{t|t-1} + K_tr_t)
+	- Covar 
+		- First turn Q + AP_{t-1|t-1}A' -> \Sigma_{t|t-1}  (\Sigma_{t|t-1} - \Sigma_{t|t-1}C'(R + C\Sigma_{t|t-1}C')^{-1}C\Sigma_{t|t-1})
+		- Turn R + C\Sigma_{t|t-1}C' -> S_t   (\Sigma_{t|t-1} - \Sigma_{t|t-1}C'S_t^{-1}C\Sigma_{t|t-1})
+		- Turn \Sigma_{t|t-1}C'S_t^{-1} to K_t  (\Sigma_{t|t-1} - K_tC\Sigma_{t|t-1})
+		- Collect \Sigma_{t-1|t-1} on right to give (I - K_tC)\Sigma_{t|t-1}
+
+
+Simplify function
+	- Start from lowest level.
+	- First try collecting terms on left and right
+	- Apply all the rules as described above in a sensible order
+	- Return a list of the shortest expressions
+	
+	- Traverse down tree to lowest level
+	- Find all MatMuls/MatAdds at this level. MatAdds may need to be enclosed in inverse or transpose 
+	- For each of these MatMuls/MatAdds, check if other matches can be found at other levels of the expr
+	- If we find 1 or more other matches, apply replace algorithm to get a simplified expression.
+	- Order expressions according to length and depth. Append them to list of possible simplifications. Also update a dictionary that stores
+	  the subsititutions made.
+	- Repeat the procedure for each depth of the tree using the simplified expressions from the previous iteration
+	
+Create GUI for library
+	- Allows for creation of variables, MVG objects (maybe GPs) then perform operations to produce new MVG objects
+	- For MVG objects we can get full expressions in latex maybe produce code for other languages to calculate mean and covariances.
+	- Allow for copying of code
+	
+	- Create model
+		- Specify distributions e.g. prior and likelihood. For distribution we ask for: variable, mean, covariance
+		- Calculate joint, posterior, posterior predictive and marginal (we can select which to produce)
+		- Return o/p e.g. dialog box (for each?). In Latex:
+				- Distribution expressions pre-simplification
+				- List of simplifications with possibility of renaming substitution vars
+	
+	
