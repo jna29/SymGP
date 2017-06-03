@@ -21,109 +21,205 @@ BIG_LAMBDA_GREEK = '\u039b'
 SMALL_ETA_GREEK = '\u03b7' 
 
 
-def expandmatsums(sums, debug=False):
-    """
-        Helper method for 'expand_matmul' 
-        Based on 'def _expandsums' in sympy.core.mul
-    """
-    from symgp.superexpressions.supermatadd import SuperMatAdd, SuperMatMul
-    
-    if debug:
-        print("sums: ", sums)
-             
-    L = len(sums)
-    
-    if debug:
-        print("L: ", L)
-        
-    if L == 1:
-        return sums[0]
-    terms = []
-    left = expandmatsums(sums[:L//2], debug).args
-    right = expandmatsums(sums[L//2:], debug).args
-    
-    if debug:
-        print("left: ", left)
-        print("right: ", right)
-            
-    terms = [a*b for a in left for b in right]
-    added = SuperMatAdd(*terms)
-    
-    if debug:
-        print("terms: ", terms)
-        print("added: ", added)
-        
-    return added
 
-def expand_matmul(expr, debug=False):
+######## Matrix operations with lists as matrices ########
+def matmul(list1, list2, debug=False):
     """
-        Expands MatMul objects e.g. C*(A+B) -> C*A + C*B
-        Based on 'def _eval_expand_mul' in sympy.core.mul
+        Multiply two lists in a matrix fashion.
+    
+        Similar to numpy's matrix multiplication of arrays:
+            - If list1 has shape (m1,) (i.e. it is a 1-D list) it is broadcast to (1,m1).
+              list2 can have shapes (m1,n2) or (m1,) otherwise a Exception is raised.
+              A list of shape (n2,) or (1,) is returned.
+            - If list2 has shape (m2,) it is broadcast to (m2,1).
+              list1 can have shapes (m2,) or (m1,m2) otherwise a Exception is raised.
+              A list of shape (1,) or (m1,) is returned.
+            - Any other case requires the shapes to match.
+        
+        Multiplying all elements in a list by a number is also supported e.g. matmul(a,5) or matmul(5,a).     
+    """
+    from symgp.superexpressions import SuperMatMul, SuperMatAdd
+    
+    if debug:
+        print("list1: ",list1)
+        print("list2: ",list2)
+        
+    # Handle multiplication by integers
+    if isinstance(list1, int):
+        if isinstance(list2[0], list):
+            list2 = [[SuperMatMul(list1,list2[i][j]).doit() for j in range(len(list2[0]))] for i in range(len(list2))]
+        else:
+            list2 = [SuperMatMul(list1, v).doit() for v in list2]
+        return list2
+        
+    if isinstance(list2, int):
+        if isinstance(list1[0], list):
+            list1 = [[SuperMatMul(list2, list1[i][j]).doit() for j in range(len(list1[0]))] for i in range(len(list1))]
+        else:
+            list1 = [SuperMatMul(list2, v).doit() for v in list1]
+        return list1
+    
+    if debug:
+        print("list1: ",list1)
+        print("list2: ",list2)
+        
+    broadcast_list1 = False
+    broadcast_list2 = False
+    
+    # Check sizes and reshape if necessary
+    if isinstance(list1[0],list):
+        m1 = len(list1)
+        n1 = len(list1[0])
+    else:
+        m1 = 1
+        n1 = len(list1)
+        list1 = [e.T for e in list1]
+        broadcast_list1 = True
+    
+    if isinstance(list2[0],list):
+        m2 = len(list2)
+        n2 = len(list2[0])
+    else:
+        m2 = len(list2)
+        n2 = 1
+        broadcast_list2 = True
+    
+    # Check shapes
+    if n1 != m2:
+        raise Exception("Shapes don't match: %s, %s" % ((m1, n1), (m2, n2)))
+    
+    # Multiply based on types of lists
+    if broadcast_list1 and broadcast_list2: # (1,n1) x (m2,1)
+        #out_list = [sum([list1[i]*list2[i] for i in range(n1)])]    
+        out_list = [SuperMatAdd(*[SuperMatMul(list1[i],list2[i]).doit() for i in range(n1)]).doit()]
+    elif broadcast_list1:  # (1,n1) x (m2,n2)
+        out_list = [0 for _ in range(n2)]
+        for i in range(n2):
+            #out_list[i] = sum([list1[j]*list2[j][i] for j in range(m2)])
+            out_list[i] = SuperMatAdd(*[SuperMatMul(list1[j],list2[j][i]).doit() for j in range(m2)]).doit()
+    elif broadcast_list2:  # (m1,n1) x (m2,1)
+        out_list = [0 for _ in range(m1)]
+        for i in range(m1):
+            #out_list[i] = sum([list1[i][j]*list2[j] for j in range(m2)])
+            out_list[i] = SuperMatAdd(*[SuperMatMul(list1[i][j],list2[j]).doit() for j in range(m2)]).doit()
+    else: # (m1,n1) x (m2,n2) 
+        out_list = [[0 for _ in range(n2)] for _ in range(m1)]
+        for i in range(m1):
+            for j in range(n2):
+                #out_list[i][j] = sum([list1[i][k]*list2[k][j] for k in range(n1)])
+                out_list[i][j] = SuperMatAdd(*[SuperMatMul(list1[i][k],list2[k][j]).doit() for k in range(n1)]).doit()
+    
+    if debug:
+        print("out_list: ",out_list)
+           
+    return out_list
+
+def matadd(list1, list2, debug=False):
+    """
+        Adds two lists that must be the same shape. We reshape list of (m,) to (0,m).
+    
+        Returns a list of the same shape as the lists.
     """
     from symgp.superexpressions import SuperMatAdd
     
     if debug:
-        print("expr: ", expr)
-         
-    sums, rewrite = [], False
-    for factor in expr.args:
-        if debug:
-            print("factor: ", factor)
+        print("list1: ", list1)
+        print("list2: ", list2)
+        
+    # Check sizes
+    if isinstance(list1[0],list):
+        m1 = len(list1)
+        n1 = len(list1[0])
+    else:
+        m1 = 0
+        n1 = len(list1)
     
-        if isinstance(factor, MatrixExpr) and factor.is_MatAdd:
-            sums.append(factor)
-            rewrite = True
-        else:
-            sums.append(Basic(factor))
+    if isinstance(list2[0],list):
+        m2 = len(list2)
+        n2 = len(list2[0])
+    else:
+        m2 = 0
+        n2 = len(list2)
+
+    if m1 != m2 or n1 != n2:
+        raise Exception("Shapes don't match: %s, %s" % ((m1, n1), (m2, n2)))
+    
+    if m1 == 0:
+        out_list = [SuperMatAdd(list1[i],list2[i]).doit() for i in range(n1)]
+    else:
+        out_list = [[SuperMatAdd(list1[i][j],list2[i][j]).doit() for j in range(n1)] for i in range(m1)]
     
     if debug:
-        print("sums: ", sums)
+        print("out_list: ", out_list)
+        
+    return out_list
+
+def mattrans(mat, debug=False):
+    """
+        Returns the transpose of an mxn matrix (list of lists)
     
-    if not rewrite:
-        return expr
+        Similar to numpy's transpose.
+            - If mat's shape is (m,) we simply return mat
+            - Otherwise we return the appropriate transpose for mat shape (m,n) 
+    """
+    
+    if all([not isinstance(e,list) for e in mat]): # (m,) case
+        return [e.T.doit() for e in mat]
+    else: # Other case
+        if any([not isinstance(e,list) for e in mat]):
+            raise Exception("mat is not a regular matrix")
+        m_T = len(mat[0])
+        n_T = len(mat)
+        mat_T = [[mat[j][i].T.doit() for j in range(n_T)] for i in range(m_T)]  
+        return mat_T
+    
+def matinv(mat, debug=False):
+    """
+        Inverts nxn matrices. 
+        
+        If n > 2, we first partition then apply the algorithm again.
+        If n == 1, we simply return the SuperMatInverse.
+    """
+    
+    if any([not isinstance(e,list) for e in mat]):
+        raise Exception("This is not a suitable matrix")
+    
+    if len(mat) != len(mat[0]):
+        raise Exception("This isn't a square matrix.")
+        
+    n = len(mat)
+    
+    # Recursively calculate the inverse to get the large untidy expression
+    if n == 1:
+        return [[mat[0][0].I]]
     else:
-        if sums:
-            terms = expandmatsums(sums, debug).args
-            
-            if debug:
-                print("terms: ", terms)
-                
-            args = []
-            for term in terms:
-                t = term
-                if isinstance(t,MatrixExpr) and t.is_MatMul and any(a.is_MatAdd if isinstance(a,MatrixExpr) else False for a in t.args):
-                    t = expand_matmul(t, debug)
-                    
-                if debug:
-                    print("t: ", t)
-                    
-                args.append(t)
-            return SuperMatAdd(*args).doit()
+        if n == 2:
+            P, Q = [[mat[0][0]]], [[mat[0][1]]]
+            R, S = [[mat[1][0]]], [[mat[1][1]]]
         else:
-            return expr
-            
-def expand_matexpr(expr, debug=False):
-    """
-        Expands matrix expressions (MatrixExpr)
-    """
-    from symgp.superexpressions import SuperMatAdd
-    
-    if debug:
-        print("expr: ", expr)
+            P, Q, R, S = partition_block(mat,[len(mat)-1,len(mat[0])-1])
         
-    if expr.is_MatAdd:
-        args = []
-        args.extend([expand_matexpr(a, debug) if a.is_MatMul else a for a in expr.args])
+        #print("P: ",P, " Q: ",Q," R: ",R," S: ", S)
+        P_bar = matinv(matadd(P,matmul(matmul(matmul(-1,Q),matinv(S)),R)))
+        #print("Done P_bar")
+        Q_bar = matmul(matmul(matmul(-1,P_bar),Q),matinv(S))
+        #print("Done Q_bar")
+        R_bar = matmul(matmul(matmul(-1,matinv(S)),R),P_bar)
+        #print("Done R_bar")
+        S_bar = matadd(matinv(S),matmul(matmul(matmul(matmul(matinv(S),R),P_bar),Q),matinv(S)))
+        #print("Done S_bar")
         
-        if debug:
-            print("args: ", args)
+        # Create new matrix by top bottom method i.e. create top of matrix then create bottom
+        top = []
+        for row1, row2 in zip(P_bar,Q_bar):
+            top.append(row1+row2)
         
-        return SuperMatAdd(*args).doit()
-    elif expr.is_MatMul:
-        return expand_matmul(expr, debug).doit()
-    else:
-        return expr.doit()
-    
+        bottom = []
+        for row1, row2 in zip(R_bar,S_bar):
+            bottom.append(row1+row2)
+        
+        return top+bottom
+
 def partition_block(block, indices, debug=False):
     """
         Partitions a list into four or two sections based on the indices
@@ -293,280 +389,447 @@ def partition_block(block, indices, debug=False):
             print("b: ", b)
         
         return a, b
-                            
-def get_var_coeffs(expr, var, debug=False):
-    """ 
-        Returns the coeffs for the given variable and the remainder
-        
-        Args:
-            - 'expr' - The expanded matrix expression
-            - 'var' - List of variables for which we find the coefficients
-    
-        Returns:
-            - 'coeffs' - A list of coeffs of the variables. Same size as 'var'
-            - 'rem' - The remaining expression (when we subtract the terms corresponding to variables in 'var')
-    """
-    from symgp.superexpressions import SuperMatMul, SuperMatAdd
-    
-    if debug:
-        print("expr: ", expr)
-        print("var: ", var)
-        
-    coeffs = [ZeroMatrix(expr.shape[0],v.shape[0]) for v in var]
-    
-    if debug:
-        print("coeffs: ", coeffs)
-         
-    # Search the expression tree for each variable in var then add coefficient to list
-    if expr.is_MatAdd:
-        for arg in expr.args:
-            
-            if debug:
-                print("arg: ", arg)
-                
-            if arg in var:
-                for i, v in enumerate(var):
-                    if arg == v:
-                        coeffs[i] = arg.as_coeff_mmul()[0]
-                        if debug:
-                            print("coeffs["+str(i)+"]: ", coeffs[i])
-            else:
-                for arg2 in arg.args:
-                    if debug:
-                        print("arg2: ",arg2)
-                        
-                    if arg2 in var:
-                        for i, v in enumerate(var):
-                            if arg2 == v:
-                                coeffs[i] = SuperMatMul(*[c for c in arg.args if c != arg2]).doit()
-                                if debug:
-                                    print("coeffs["+str(i)+"]: ", coeffs[i])
-        rem = SuperMatAdd(*[c for c in expr.args if c not in [c*v for c,v in zip(coeffs,var)]]).doit()
-    elif expr.is_MatMul:
-        rem = expr
-        for arg in expr.args:
-            if debug:
-                print("arg: ", arg)
-            if arg in var:
-                for i, v in enumerate(var):
-                    if arg == v:
-                        coeffs[i] = SuperMatMul(*[c for c in expr.args if c != v]).doit()
-                        rem = ZeroMatrix(expr.shape[0], expr.shape[1])
-        
-    else:
-        rem = expr # If no match is made, we leave remainder as expr
-        for i, v in enumerate(var):
-            if expr == v:
-                coeffs[i] = Identity(expr.shape[0])
-                rem = ZeroMatrix(expr.shape[0],expr.shape[1])
-    
-    if debug:
-        print("rem: ",rem)    
-    
-    return coeffs, rem
 
-def matmul(list1, list2, debug=False):
-    """
-        Multiply two lists in a matrix fashion.
-    
-        Similar to numpy's matrix multiplication of arrays:
-            - If list1 has shape (m1,) (i.e. it is a 1-D list) it is broadcast to (1,m1).
-              list2 can have shapes (m1,n2) or (m1,) otherwise a Exception is raised.
-              A list of shape (n2,) or (1,) is returned.
-            - If list2 has shape (m2,) it is broadcast to (m2,1).
-              list1 can have shapes (m2,) or (m1,m2) otherwise a Exception is raised.
-              A list of shape (1,) or (m1,) is returned.
-            - Any other case requires the shapes to match.
-        
-        Multiplying all elements in a list by a number is also supported e.g. matmul(a,5) or matmul(5,a).     
-    """
-    from symgp.superexpressions import SuperMatMul, SuperMatAdd
-    
-    if debug:
-        print("list1: ",list1)
-        print("list2: ",list2)
-        
-    # Handle multiplication by integers
-    if isinstance(list1, int):
-        if isinstance(list2[0], list):
-            list2 = [[SuperMatMul(list1,list2[i][j]).doit() for j in range(len(list2[0]))] for i in range(len(list2))]
-        else:
-            list2 = [SuperMatMul(list1, v) for v in list2]
-        return list2
-        
-    if isinstance(list2, int):
-        if isinstance(list1[0], list):
-            list1 = [[SuperMatMul(list2, list1[i][j]).doit() for j in range(len(list1[0]))] for i in range(len(list1))]
-        else:
-            list1 = [SuperMatMul(list2, v) for v in list1]
-        return list1
-    
-    if debug:
-        print("list1: ",list1)
-        print("list2: ",list2)
-        
-    broadcast_list1 = False
-    broadcast_list2 = False
-    
-    # Check sizes and reshape if necessary
-    if isinstance(list1[0],list):
-        m1 = len(list1)
-        n1 = len(list1[0])
-    else:
-        m1 = 1
-        n1 = len(list1)
-        broadcast_list1 = True
-    
-    if isinstance(list2[0],list):
-        m2 = len(list2)
-        n2 = len(list2[0])
-    else:
-        m2 = len(list2)
-        n2 = 1
-        broadcast_list2 = True
-    
-    # Check shapes
-    if n1 != m2:
-        raise Exception("Shapes don't match: %s, %s" % ((m1, n1), (m2, n2)))
-    
-    # Multiply based on types of lists
-    if broadcast_list1 and broadcast_list2: # (1,n1) x (m2,1)
-        #out_list = [sum([list1[i]*list2[i] for i in range(n1)])]    
-        out_list = [SuperMatAdd(*[SuperMatMul(list1[i],list2[i]) for i in range(n1)]).doit()]
-    elif broadcast_list1:  # (1,n1) x (m2,n2)
-        out_list = [0 for _ in range(n2)]
-        for i in range(n2):
-            #out_list[i] = sum([list1[j]*list2[j][i] for j in range(m2)])
-            out_list[i] = SuperMatAdd(*[SuperMatMul(list1[j],list2[j][i]) for j in range(m2)]).doit()
-    elif broadcast_list2:  # (m1,n1) x (m2,1)
-        out_list = [0 for _ in range(m1)]
-        for i in range(m1):
-            #out_list[i] = sum([list1[i][j]*list2[j] for j in range(m2)])
-            out_list[i] = SuperMatAdd(*[SuperMatMul(list1[i][j],list2[j]) for j in range(m2)]).doit()
-    else: # (m1,n1) x (m2,n2) 
-        out_list = [[0 for _ in range(n2)] for _ in range(m1)]
-        for i in range(m1):
-            for j in range(n2):
-                #out_list[i][j] = sum([list1[i][k]*list2[k][j] for k in range(n1)])
-                out_list[i][j] = SuperMatAdd(*[SuperMatMul(list1[i][k],list2[k][j]) for k in range(n1)]).doit()
-    
-    if debug:
-        print("out_list: ",out_list)
-           
-    return out_list
 
-def matadd(list1, list2, debug=False):
-    """
-        Adds to lists that must be the same shape. We reshape list of (m,) to (0,m)
-    
-        Returns a list of the same shape as the lists.
-    """
-    from symgp.superexpressions import SuperMatAdd
-    
-    if debug:
-        print("list1: ", list1)
-        print("list2: ", list2)
-        
-    # Check sizes
-    if isinstance(list1[0],list):
-        m1 = len(list1)
-        n1 = len(list1[0])
-    else:
-        m1 = 0
-        n1 = len(list1)
-    
-    if isinstance(list2[0],list):
-        m2 = len(list2)
-        n2 = len(list2[0])
-    else:
-        m2 = 0
-        n2 = len(list2)
-
-    if m1 != m2 or n1 != n2:
-        raise Exception("Shapes don't match: %s, %s" % ((m1, n1), (m2, n2)))
-    
-    if m1 == 0:
-        out_list = [SuperMatAdd(list1[i],list2[i]) for i in range(n1)]
-    else:
-        out_list = [[SuperMatAdd(list1[i][j],list2[i][j]) for j in range(n1)] for i in range(m1)]
-    
-    if debug:
-        print("out_list: ", out_list)
-        
-    return out_list
-
-def mattrans(mat, debug=False):
-    """
-        Returns the transpose of an mxn matrix (list of lists)
-    
-        Similar to numpy's transpose.
-            - If mat's shape is (m,) we simply return mat
-            - Otherwise we return the appropriate transpose for mat shape (m,n) 
-    """
-    
-    if all([not isinstance(e,list) for e in mat]): # (m,) case
-        return [e.T for e in mat]
-    else: # Other case
-        if any([not isinstance(e,list) for e in mat]):
-            raise Exception("mat is not a regular matrix")
-        m_T = len(mat[0])
-        n_T = len(mat)
-        mat_T = [[mat[j][i].T for j in range(n_T)] for i in range(m_T)]  
-        return mat_T
-    
-def matinv(mat, debug=False):
-    """
-        Inverts nxn matrices. 
-        
-        If n > 2, we first partition then apply the algorithm again.
-        If n == 1, we simply return the SuperMatInverse.
-    """
-    
-    if any([not isinstance(e,list) for e in mat]):
-        raise Exception("This is not a suitable matrix")
-    
-    if len(mat) != len(mat[0]):
-        raise Exception("This isn't a square matrix.")
-        
-    n = len(mat)
-    
-    # Recursively calculate the inverse to get the large untidy expression
-    if n == 1:
-        return [[mat[0][0].I]]
-    else:
-        if n == 2:
-            P, Q = [[mat[0][0]]], [[mat[0][1]]]
-            R, S = [[mat[1][0]]], [[mat[1][1]]]
-        else:
-            P, Q, R, S = partition_block(mat,[len(mat)-1,len(mat[0])-1])
-        
-        #print("P: ",P, " Q: ",Q," R: ",R," S: ", S)
-        P_bar = matinv(matadd(P,matmul(matmul(matmul(-1,Q),matinv(S)),R)))
-        #print("Done P_bar")
-        Q_bar = matmul(matmul(matmul(-1,P_bar),Q),matinv(S))
-        #print("Done Q_bar")
-        R_bar = matmul(matmul(matmul(-1,matinv(S)),R),P_bar)
-        #print("Done R_bar")
-        S_bar = matadd(matinv(S),matmul(matmul(matmul(matmul(matinv(S),R),P_bar),Q),matinv(S)))
-        #print("Done S_bar")
-        
-        # Create new matrix by top bottom method i.e. create top of matrix then create bottom
-        top = []
-        for row1, row2 in zip(P_bar,Q_bar):
-            top.append(row1+row2)
-        
-        bottom = []
-        for row1, row2 in zip(R_bar,S_bar):
-            bottom.append(row1+row2)
-        
-        return top+bottom
-
-def getZ(cov, debug=False):
+######## MVG helper functions ########
+def get_Z(cov, debug=False):
     """
         Calculates normalising constant symbol using cov
     """
     return -cov.shape[0]/2*ln(2*pi) - Rational(1,2)*ln(Determinant(cov))
 
+
+######### Search and replace functions ########
+def replace_with_num(expr, d, debug=False):
+    """
+        Performs a DFS search through the  expression tree to replace MatrixSymbols with 
+        numerical matrices.
+    
+        Args:
+            - 'expr' - The current node in expression tree
+            - 'd' - A dictionary mapping the matrix symbols to numerical matrices
+
+        Returns:
+            - Based on type of 'expr':
+                - MatrixSymbol - Return corresponding numerical matrix
+                - Number - Return Number
+                - MatMul/MatAdd - Return (MatAdd/MatMul)({children})
+        
+    """
+    #from symgp.superexpressions import SuperMatMul, SuperMatAdd, SuperMatInverse, SuperMatTranspose
+    import numpy as np
+    
+    if isinstance(expr, MatrixSymbol) or isinstance(expr, Number):
+        if isinstance(expr, MatrixSymbol):
+            try:
+                return d[expr.name]
+            except KeyError as e:
+                print("Error: No numerical matrix was specified for %s" % (e))
+        else:
+            return expr
+        
+    r = []
+    if debug:
+        print("expr: ",expr)
+    for arg in expr.args:
+        if debug:
+            print("arg: ",arg)
+        r.append(replace_with_num(arg, d, debug))
+    
+    # MatMul/MatAdd/Transpose/Inverse (MatrixSymbol is covered above)
+    if isinstance(expr, MatrixExpr):  
+        if debug:
+            print("expr: ",expr)
+            for i, ele in enumerate(r):
+                print(i,": ",ele)
+        if expr.is_MatMul:
+            for e in r:
+                if not isinstance(e,Number):
+                    shape = e.shape[0]
+                    break
+                    
+            out = np.eye(shape)
+            for e in r:
+                if isinstance(e,Number):
+                    out *= np.float(e)
+                elif not isinstance(e,np.ndarray):
+                    out = np.dot(out,np.array(e.tolist(),dtype=np.float32))
+                else:
+                    out = np.dot(out,e)
+            return out
+            #return SuperMatMul(*r)
+        elif expr.is_MatAdd:
+            if len(r[0].shape) == 2:
+                out = np.zeros((r[0].shape[0],r[0].shape[1]))
+            else:
+                out = np.zeros(r[0].shape[0])
+            
+            for e in r:
+                if not isinstance(e,np.ndarray):
+                    out += np.array(e.tolist(),dtype=np.float32).reshape(out.shape)
+                else:
+                    out += e.reshape(out.shape)
+            return out
+            #return SuperMatAdd(*r)
+        elif expr.is_Inverse:
+            out = np.linalg.inv(r[0])
+            return out
+            #return SuperMatInverse(*r)
+        else: # expr.is_Transpose
+            out = r[0].T 
+            return out
+            #return SuperMatTranspose(*r)
+    else:
+        raise Exception("Expression should be a MatrixExpr")
+
+def evaluate_expr(expr, d, debug=False):
+    """
+        Evaluates a matrix expression with the given numerical matrices
+    
+        Args:
+            - 'expr' - The symbolic matrix expression
+            - 'd' - A dictionary mapping the matrix symbols to numerical matrices
+    
+        Returns:
+            - 'r' - The result of all the matrix calculations
+    """
+    
+    r = replace_with_num(expr, d, debug)
+    
+    return r
+    
+def replace_with_expanded(expr, done=True, debug=False):
+    """
+        Similar to 'replace_with_num' above except we replace SuperMatrixSymbols
+        with their expanded forms if they exist
+    
+        Args:
+            expr - The current MatrixExpr
+        
+        Returns:
+            expr - The expanded MatrixExpr
+            done - Boolean indicating whether no more expansions can be done
+    """
+    
+    from symgp.superexpressions import (SuperMatSymbol, SuperMatTranspose, SuperMatInverse, SuperMatAdd, SuperMatMul, SuperDiagMat,
+                                        SuperBlockDiagMat)
+    
+    #print("expr: ",expr)
+    if (not isinstance(expr, MatMul) and not isinstance(expr, MatAdd) and 
+        not isinstance(expr, Inverse) and not isinstance(expr, Transpose)):
+        if isinstance(expr, SuperMatSymbol) and expr.expanded is not None:
+            done = False
+            #print("Returned %s" % (expr.expanded))
+            return expr.expanded, done
+        else:
+            #print("Returned %s" % (expr))
+            return expr, done
+        
+    r = []
+    #print("expr: ",expr)
+    for arg in expr.args:
+        #print("expr: %s, arg: %s" % (expr, arg))
+        expanded, done = replace_with_expanded(arg, done)
+        #print("expr: %s, expanded: %s" % (expr, expanded))
+        r.append(expanded)
+       
+    if isinstance(expr, MatrixExpr):
+        if expr.is_MatMul:
+            e = SuperMatMul(*r)
+        elif expr.is_MatAdd:
+            e = SuperMatAdd(*r)
+        elif expr.is_Inverse:
+            if isinstance(expr, SuperMatSymbol):
+                e = SuperMatInverse(*r)
+            else:
+                e = SuperMatInverse(*r)
+        elif expr.is_Transpose:
+            if isinstance(expr, SuperMatSymbol):
+                e = SuperMatTranspose(*r)
+            else:
+                e = SuperMatTranspose(*r)
+        else:
+            raise Exception("Unknown expression of type %s" % (type(expr)))
+        
+        #print("e: ",e)
+        return e, done
+    else:
+        raise Exception("Expression should be a MatrixExpr")
+
+def expand_to_fullexpr(expr, num_passes=-1, debug=False):
+    """
+        Expands a MatrixExpr composed of SuperMatSymbols by substituting any SuperMatSymbol
+        with an 'expanded' or 'blockform'
+    
+        Args:
+            expr - The expression to expand
+            num_passes - The number of passes to make through the expression. -1 indicates that
+                         we pass through expression until no more substitutions can be made.
+    
+        Return:
+            expanded_expr - The expanded expression
+    """
+    
+    # Keep on passing through expression until no more substitutions can be made
+    if num_passes == -1:
+        done = False
+        e = expr
+        while not done:
+            done = True
+            e, done = replace_with_expanded(e, done)
+            #print("e (out): ",e)
+        
+        return e.doit().doit()
+    else:
+        e = expr
+        for _ in range(num_passes):
+            e, _ = replace_with_expanded(e)
+        
+        return e.doit().doit()
+        
+# TODO: Find a better substitution algorithm. Problem how to deal with symbols that aren't explicitly grouped
+def replace(expr, rules, debug=False):
+    """
+        Replaces expressions in expr with the given rules.
+    
+        Args:
+            expr - The expression for which we want to replace Matrix Expressions
+            rules - A dictionary where we replace the key with the value.
+                    N.B. For an expression of the form -1*A we must replace it with another expression
+                         of the form -1*B and not A with B.
+    
+        Returns:
+            The expression with the substituted for Matrix Symbols
+    """
+        
+    from collections import deque
+    from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat, SuperMatAdd, SuperMatSymbol
+    
+    # Get the full expression
+    #full_expr = expand_to_fullexpr(expr)
+    full_expr = expr
+    
+    # For each substitution rule, replace the corresponding sub-expression
+    for k, v in rules.items():
+        
+        if debug:
+            print("full_expr: ", full_expr)   
+        
+        m = len(k.args)   # Number of arguments. TODO: Check for cases where k is a single symbol
+        
+        if debug:
+            print("m: ", m)
+        
+        # Table used to build back tree. 
+        #
+        # We pair a key of a sub_expression with an id 'k' that indicates sub_expr was the k'th entry into the table with either:
+        #
+        #       - A list of (sub_expr.args[i], k) tuples indicating the keys from which to search for the
+        #         next expressions in the tree in their correct order:
+        #
+        #                     {(sub_expr, j): [(sub_expr.args[0],m),(sub_expr.args[1],l), ...]}
+        #         
+        #       - A Expr that we substitute in for sub_expr when it is retrieved by higher nodes in the expression tree:
+        #
+        #                     {(sub_expr, j): sub_expr_repl}   
+        #
+        #         where sub_expr_repl is the expression that we replace sub_expr with. It can be sub_expr itself or a replacement
+        #         we define.
+        tree_table = dict()
+        
+        queue = deque(((full_expr, 0, 0),))
+        
+        if debug:
+            print("queue: ", queue)
+        #tree_table[(full_expr,0)] = list(zip(list(full_expr.args),[1]*len(full_expr.args)))
+        
+        num_nodes = 0
+        count = 1
+        while len(queue) > 0:
+            sub_expr, level, old_k = queue.pop()
+            
+            if debug:
+                print("sub_expr: %s, level: %s, old_k: %s" % (sub_expr, level, old_k))
+            
+            if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
+                isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
+                isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
+            
+                # Match current rule to expressions in this sub expression
+                n = len(sub_expr.args)
+                
+                if debug:
+                    print("n: ",n)
+                
+                i = 0
+                while i < n:
+                    j = 0
+                    l = 0    # Used when we need to skip over symbols e.g. for addition where we may need to match over symbols.
+                    while j < m and i + l + j < n:
+                        if debug:
+                            print("i: %s, j: %s, l: %s" % (i,j,l))
+                            
+                        if i + l + j >= n:
+                            break
+                        
+                        if debug:
+                            print("sub_expr.args[%s]: %s, k.args[%s]: %s" % (i+l+j,sub_expr.args[i+l+j], j, k.args[j]))
+                            print("Match? ", sub_expr.args[i+l+j].doit() == k.args[j].doit())
+                            
+                        if (sub_expr.args[i+l+j].doit() != k.args[j].doit()):# or (sub_expr.args[i+l+j].match(k.args[j])):
+                            #foundMatch = False
+                            # As additions may be stored in any order, we need to skip symbols so that we can match
+                            # the pattern
+                            if isinstance(k, MatAdd) and isinstance(sub_expr, MatAdd):
+                                l += 1
+                            else:
+                                break
+                        else:
+                            j += 1
+                    
+                          
+                    if j == m:  # Match found: Replace match with pattern
+                        if debug:
+                            print("Match found!")
+                            
+                        if m == n:
+                            new_level = level
+                        else:
+                            new_level = level + 1
+            
+                        queue.appendleft((v, new_level, count))
+                        
+                        if debug:
+                            print("new_level: ", new_level)
+                            if tree_table.get((sub_expr, level, old_k)):
+                                print("(Before) tree_table[(sub_expr, level, old_k)]: ", tree_table[(sub_expr, level, old_k)])
+                          
+                        # We need to re-order sub_expr - mainly for matches in MatAdds with remainders e.g. matching A in A + B + C
+                        if l > 0:
+                            old_sub_expr = sub_expr
+                            
+                            rem = sub_expr
+                            for c in k.args:
+                                rem -= c
+                            if debug:
+                                print("rem: ", rem)
+                            rem = [rem] if not isinstance(rem,MatAdd) else list(rem.args)
+                            if debug:
+                                print("rem: ", rem)
+                            new_args = list(k.args) + rem
+                            sub_expr = SuperMatAdd(*new_args)
+                            if debug:
+                                print("new sub_expr: ", sub_expr)
+                            
+                            # As we changed the sub_expr we have to reassign the elements of the old one
+                            if tree_table.get((old_sub_expr, level, old_k)):
+                                old_values = tree_table.pop((old_sub_expr, level, old_k), None)
+                                tree_table[(sub_expr, level, old_k)] = old_values + [(v, new_level, count)]
+                            else:
+                                tree_table[(sub_expr, level, old_k)] = [(v, new_level, count)]
+                            
+                            count += 1
+                                
+                        else:    
+                            # Check entry for sub_expr exists
+                            if tree_table.get((sub_expr, level, old_k)):
+                                tree_table[(sub_expr, level, old_k)].append((v, new_level, count))
+                            else:
+                                tree_table[(sub_expr, level, old_k)] = [(v, new_level, count)]
+                            
+                            count += 1
+                        
+
+                        if debug:    
+                            print("(After) tree_table[(sub_expr, level, old_k)]: ", tree_table[(sub_expr, level, old_k)])    
+                            
+                        # Start after pattern     
+                        i += m
+                    else:
+                        queue.appendleft((sub_expr.args[i], level+1, count))
+                        
+                        # Check entry for sub_expr exists
+                        if tree_table.get((sub_expr, level, old_k)):
+                            tree_table[(sub_expr, level, old_k)].append((sub_expr.args[i], level+1, count))
+                        else:
+                            tree_table[(sub_expr, level, old_k)] = [(sub_expr.args[i], level+1, count)]
+                        
+                        count += 1
+                        
+                        # Start at next symbol     
+                        i += 1
+                    
+                    if debug:
+                        print("queue: ",queue)
+                        print("tree_table: ", tree_table) 
+            else:
+                # Add expression for this node
+                tree_table[(sub_expr, level, old_k)] = sub_expr
+                 
+                if debug:
+                    print("tree_table: ", tree_table)        
+        
+        # Create expression from table
+        sorted_tree_table = sorted(tree_table.items(), key=lambda elem: elem[0][1], reverse=True)  # Sort based on level
+        
+        if debug:
+            print("sorted_tree_table: ", sorted_tree_table)
+        
+        for p, c in sorted_tree_table:
+            
+            # Skip terminal nodes else update tree table for non-terminal nodes
+            if p[0] == c:
+                continue
+            else:
+                # Create MatrixExpr using the elements in the value c, which is a list, for the key p and
+                # then update 'tree_table'
+                tree_table[p] = type(p[0])(*[tree_table[e] for e in c])  
+        
+        # Rewrite full expression    
+        full_expr = tree_table[sorted_tree_table[-1][0]]    
+    
+    if debug:   
+        print("final_expr: ",full_expr)
+                    
+    return full_expr
+            
+def replace_with_SuperMat(expr, d, debug=False):
+    """
+        Similar to replace_with_num above except we replace symbols with the 
+        corresponding SuperMatExpr symbols
+    """
+    
+    from symgp.superexpressions import SuperMatMul, SuperMatAdd, SuperMatInverse, SuperMatTranspose
+    
+    if isinstance(expr, Symbol) or isinstance(expr, Number):
+        if isinstance(expr, Symbol):
+            try:
+                return d[expr.name]
+            except KeyError as e:
+                print("Error: No SuperMatSymbol substitute was specified for %s" % (e))
+        else:
+            return expr
+        
+    r = []
+    #"expr: ",expr)
+    for arg in expr.args:
+        #print("arg: ",arg)
+        r.append(replace_with_SuperMat(arg, d))
+        
+    if isinstance(expr, Expr):
+        if expr.is_Mul:
+            return SuperMatMul(*r)
+        elif expr.is_Add:
+            return SuperMatAdd(*r)
+        elif expr.is_Inverse:
+            return SuperMatInverse(*r)
+        else: # expr.is_Transpose
+            return SuperMatTranspose(*r)
+    else:
+        raise Exception("Expression should be a MatrixExpr")
+             
+    
+######## LaTeX printing ########
 class matLatPrinter(LatexPrinter):
         
     def _print_Symbol(self, expr):
@@ -744,138 +1007,172 @@ def matLatex(expr, profile=None, debug=False, **kwargs):
     
     return out_latex
 
-def search_and_replace_num(expr, d, debug=False):
+def updateLatexDoc(filename, expr, debug=False):
     """
-        Performs a DFS search through the  expression tree to replace MatrixSymbols with 
-        numerical matrices.
+        Updates the latex filename with the given expression.
+    
+        This function is mainly used to typeset the LaTeX code that is produced by calling
+        utils.matLatex(expr). 
+    
+        We append the expression to the list of 'dmath' environments from the breqn package.
+        For MVGs we also display the full expressions for the mean and covariance below the 
+        expression for the distribution.
     
         Args:
-            - 'expr' - The current node in expression tree
-            - 'd' - A dictionary mapping the matrix symbols to numerical matrices
-
-        Returns:
-            - Based on type of 'expr':
-                - MatrixSymbol - Return corresponding numerical matrix
-                - Number - Return Number
-                - MatMul/MatAdd - Return (MatAdd/MatMul)({children})
-        
+            filename - The '.tex' file to which we write the LaTeX code.
+            expr - The expression (or list of expressions) for which we want to generate LaTeX. 
+                   This can be any native SymPy expression (and the subclasses in this library) 
+                   or an MVG. 
+                
     """
-    from symgp.superexpressions import SuperMatMul, SuperMatAdd, SuperMatInverse, SuperMatTranspose
-    import numpy as np
+
+    import subprocess
+    from MVG import MVG
     
-    if isinstance(expr, MatrixSymbol) or isinstance(expr, Number):
-        if isinstance(expr, MatrixSymbol):
-            try:
-                return d[expr.name]
-            except KeyError as e:
-                print("Error: No numerical matrix was specified for %s" % (e))
-        else:
-            return expr
+    with open(filename,'r+') as f:
+        contents = f.read()
         
-    r = []
-    if debug:
-        print("expr: ",expr)
-    for arg in expr.args:
-        if debug:
-            print("arg: ",arg)
-        r.append(search_and_replace_num(arg, d, debug))
+        split_contents = re.split(r"(.+\\begin\{document\}\n)(.+)(\\end\{document\}.*)", contents, flags=re.DOTALL)
         
-    if isinstance(expr, MatrixExpr):
-        if debug:
-            print("expr: ",expr)
-            for i, ele in enumerate(r):
-                print(i,": ",ele)
-        if expr.is_MatMul:
-            for e in r:
-                if not isinstance(e,Number):
-                    shape = e.shape[0]
-                    break
-                    
-            out = np.eye(shape)
-            for e in r:
-                if isinstance(e,Number):
-                    out *= np.float(e)
-                elif not isinstance(e,np.ndarray):
-                    out = np.dot(out,np.array(e.tolist(),dtype=np.float32))
-                else:
-                    out = np.dot(out,e)
-            return out
-            #return SuperMatMul(*r)
-        elif expr.is_MatAdd:
-            if len(r[0].shape) == 2:
-                out = np.zeros((r[0].shape[0],r[0].shape[1]))
-            else:
-                out = np.zeros(r[0].shape[0])
+        edited_content = split_contents[2]
+        
+        
+        if edited_content == '\n':
+            edited_content = ''
             
-            for e in r:
-                if not isinstance(e,np.ndarray):
-                    out += np.array(e.tolist(),dtype=np.float32).reshape(out.shape)
-                else:
-                    out += e.reshape(out.shape)
-            return out
-            #return SuperMatAdd(*r)
-        elif expr.is_Inverse:
-            out = np.linalg.inv(r[0])
-            return out
-            #return SuperMatInverse(*r)
-        else: # expr.is_Transpose
-            out = r[0].T 
-            return out
-            #return SuperMatTranspose(*r)
-    else:
-        raise Exception("Expression should be a MatrixExpr")
+        if not isinstance(expr, list):
+            expr = [expr]
+                
+        for e in expr:
+            # Write our expression to the end of the file
+                
+            if isinstance(e, MVG):    
+                edited_content += r'\section{$'+ matLatex(e.name) + r'$}' + "\n"
+                edited_content += r'\begingroup\makeatletter\def\f@size{12}\check@mathfonts'+ "\n" + \
+                                  r'\def\maketag@@@#1{\hbox{\m@th\large\normalfont#1}}'+ "\n"
+                edited_content += matLatex(e)
+                edited_content += r'\endgroup'+ "\n\n"
+            else:
+                edited_content += r'\section{expression}' + "\n"
+                edited_content += "\\begin{align*}\n"
+                edited_content += matLatex(e)
+                edited_content += "\n\\end{align*}\n"
+        
+        split_contents[2] = edited_content
+        
+        f.seek(0)
+        f.write(''.join(split_contents))
+        f.truncate()
+        
+    
+    subprocess.check_call(["latexmk", "-pdf",str(filename)])
+    subprocess.check_call(["open", filename.split(".")[0]+".pdf"])
 
-def symbols2SuperMat(expr, d, debug=False):
+
+######## Expression conversion functions ########
+def expand_mat_sums(sums, debug=False):
     """
-        Similar to search_and_replace_num above except we replace symbols with the 
-        corresponding SuperMatExpr symbols
+        Helper method for 'expand_matmul' 
+        Based on 'def _expandsums' in sympy.core.mul
     """
+    from symgp.superexpressions.supermatadd import SuperMatAdd, SuperMatMul
     
-    from symgp.superexpressions import SuperMatMul, SuperMatAdd, SuperMatInverse, SuperMatTranspose
+    if debug:
+        print("sums: ", sums)
+             
+    L = len(sums)
     
-    if isinstance(expr, Symbol) or isinstance(expr, Number):
-        if isinstance(expr, Symbol):
-            try:
-                return d[expr.name]
-            except KeyError as e:
-                print("Error: No SuperMatSymbol substitute was specified for %s" % (e))
+    if debug:
+        print("L: ", L)
+        
+    if L == 1:
+        return sums[0]
+    terms = []
+    left = expand_mat_sums(sums[:L//2], debug).args
+    right = expand_mat_sums(sums[L//2:], debug).args
+    
+    if debug:
+        print("left: ", left)
+        print("right: ", right)
+            
+    terms = [a*b for a in left for b in right]
+    added = SuperMatAdd(*terms)
+    
+    if debug:
+        print("terms: ", terms)
+        print("added: ", added)
+        
+    return added
+
+def expand_matmul(expr, debug=False):
+    """
+        Expands MatMul objects e.g. C*(A+B) -> C*A + C*B
+        Based on 'def _eval_expand_mul' in sympy.core.mul
+    """
+    from symgp.superexpressions import SuperMatAdd
+    
+    if debug:
+        print("expr: ", expr)
+         
+    sums, rewrite = [], False
+    for factor in expr.args:
+        if debug:
+            print("factor: ", factor)
+    
+        if isinstance(factor, MatrixExpr) and factor.is_MatAdd:
+            sums.append(factor)
+            rewrite = True
+        else:
+            sums.append(Basic(factor))
+    
+    if debug:
+        print("sums: ", sums)
+    
+    if not rewrite:
+        return expr
+    else:
+        if sums:
+            terms = expand_mat_sums(sums, debug).args
+            
+            if debug:
+                print("terms: ", terms)
+                
+            args = []
+            for term in terms:
+                t = term
+                if isinstance(t,MatrixExpr) and t.is_MatMul and any(a.is_MatAdd if isinstance(a,MatrixExpr) else False for a in t.args):
+                    t = expand_matmul(t, debug)
+                    
+                if debug:
+                    print("t: ", t)
+                    
+                args.append(t)
+            return SuperMatAdd(*args).doit()
         else:
             return expr
+            
+def expand_matexpr(expr, debug=False):
+    """
+        Expands matrix expressions (MatrixExpr)
+    """
+    from symgp.superexpressions import SuperMatAdd
+    
+    if debug:
+        print("expr: ", expr)
         
-    r = []
-    #"expr: ",expr)
-    for arg in expr.args:
-        #print("arg: ",arg)
-        r.append(symbols2SuperMat(arg, d))
+    if expr.is_MatAdd:
+        args = []
+        args.extend([expand_matexpr(a, debug) if a.is_MatMul else a for a in expr.args])
         
-    if isinstance(expr, Expr):
-        if expr.is_Mul:
-            return SuperMatMul(*r)
-        elif expr.is_Add:
-            return SuperMatAdd(*r)
-        elif expr.is_Inverse:
-            return SuperMatInverse(*r)
-        else: # expr.is_Transpose
-            return SuperMatTranspose(*r)
+        if debug:
+            print("args: ", args)
+        
+        return SuperMatAdd(*args).doit()
+    elif expr.is_MatMul:
+        return expand_matmul(expr, debug).doit()
     else:
-        raise Exception("Expression should be a MatrixExpr")
-             
-def evaluate_expr(expr, d, debug=False):
-    """
-        Evaluates a matrix expression with the given numerical matrices
-    
-        Args:
-            - 'expr' - The symbolic matrix expression
-            - 'd' - A dictionary mapping the matrix symbols to numerical matrices
-    
-        Returns:
-            - 'r' - The result of all the matrix calculations
-    """
-    
-    r = search_and_replace_num(expr, d, debug)
-    
-    return r
-
+        return expr.doit()
+                            
 def collect(expr, syms, muls, evaluate=None, debug=False):
     """
         Collect additive terms of a matrix expression
@@ -1174,418 +1471,8 @@ def collect(expr, syms, muls, evaluate=None, debug=False):
                     return SuperMatAdd(*[val*key for key, val in collected.items()])
     else:
         return collected
-
-def search_and_replace_expanded(expr, done=True, debug=False):
-    """
-        Similar to 'search_and_replace_num' above except we replace SuperMatrixSymbols
-        with their expanded forms if they exist
-    
-        Args:
-            expr - The current MatrixExpr
-        
-        Returns:
-            expr - The expanded MatrixExpr
-            done - Boolean indicating whether no more expansions can be done
-    """
-    
-    from symgp.superexpressions import (SuperMatSymbol, SuperMatTranspose, SuperMatInverse, SuperMatAdd, SuperMatMul, SuperDiagMat,
-                                        SuperBlockDiagMat)
-    
-    #print("expr: ",expr)
-    if (not isinstance(expr, MatMul) and not isinstance(expr, MatAdd) and 
-        not isinstance(expr, Inverse) and not isinstance(expr, Transpose)):
-        if isinstance(expr, SuperMatSymbol) and expr.expanded is not None:
-            done = False
-            #print("Returned %s" % (expr.expanded))
-            return expr.expanded, done
-        else:
-            #print("Returned %s" % (expr))
-            return expr, done
-        
-    r = []
-    #print("expr: ",expr)
-    for arg in expr.args:
-        #print("expr: %s, arg: %s" % (expr, arg))
-        expanded, done = search_and_replace_expanded(arg, done)
-        #print("expr: %s, expanded: %s" % (expr, expanded))
-        r.append(expanded)
-       
-    if isinstance(expr, MatrixExpr):
-        if expr.is_MatMul:
-            e = SuperMatMul(*r)
-        elif expr.is_MatAdd:
-            e = SuperMatAdd(*r)
-        elif expr.is_Inverse:
-            if isinstance(expr, SuperMatSymbol):
-                e = SuperMatInverse(*r)
-            else:
-                e = SuperMatInverse(*r)
-        elif expr.is_Transpose:
-            if isinstance(expr, SuperMatSymbol):
-                e = SuperMatTranspose(*r)
-            else:
-                e = SuperMatTranspose(*r)
-        else:
-            raise Exception("Unknown expression of type %s" % (type(expr)))
-        
-        #print("e: ",e)
-        return e, done
-    else:
-        raise Exception("Expression should be a MatrixExpr")
-    
-def expand_to_fullexpr(expr, num_passes=-1, debug=False):
-    """
-        Expands a MatrixExpr composed of SuperMatSymbols by substituting any SuperMatSymbol
-        with an 'expanded' or 'blockform'
-    
-        Args:
-            expr - The expression to expand
-            num_passes - The number of passes to make through the expression. -1 indicates that
-                         we pass through expression until no more substitutions can be made.
-    
-        Return:
-            expanded_expr - The expanded expression
-    """
-    
-    # Keep on passing through expression until no more substitutions can be made
-    if num_passes == -1:
-        done = False
-        e = expr
-        while not done:
-            done = True
-            e, done = search_and_replace_expanded(e, done)
-            #print("e (out): ",e)
-        
-        return e.doit().doit()
-    else:
-        e = expr
-        for _ in range(num_passes):
-            e, _ = search_and_replace_expanded(e)
-        
-        return e.doit().doit()
-
-def updateLatexDoc(filename, expr, debug=False):
-    """
-        Updates the latex filename with the given expression.
-    
-        This function is mainly used to typeset the LaTeX code that is produced by calling
-        utils.matLatex(expr). 
-    
-        We append the expression to the list of 'dmath' environments from the breqn package.
-        For MVGs we also display the full expressions for the mean and covariance below the 
-        expression for the distribution.
-    
-        Args:
-            filename - The '.tex' file to which we write the LaTeX code.
-            expr - The expression (or list of expressions) for which we want to generate LaTeX. 
-                   This can be any native SymPy expression (and the subclasses in this library) 
-                   or an MVG. 
-                
-    """
-
-    import subprocess
-    from MVG import MVG
-    
-    with open(filename,'r+') as f:
-        contents = f.read()
-        
-        split_contents = re.split(r"(.+\\begin\{document\}\n)(.+)(\\end\{document\}.*)", contents, flags=re.DOTALL)
-        
-        edited_content = split_contents[2]
-        
-        
-        if edited_content == '\n':
-            edited_content = ''
-            
-        if not isinstance(expr, list):
-            expr = [expr]
-                
-        for e in expr:
-            # Write our expression to the end of the file
-                
-            if isinstance(e, MVG):    
-                edited_content += r'\section{$'+ matLatex(e.name) + r'$}' + "\n"
-                edited_content += r'\begingroup\makeatletter\def\f@size{12}\check@mathfonts'+ "\n" + \
-                                  r'\def\maketag@@@#1{\hbox{\m@th\large\normalfont#1}}'+ "\n"
-                edited_content += matLatex(e)
-                edited_content += r'\endgroup'+ "\n\n"
-            else:
-                edited_content += r'\section{expression}' + "\n"
-                edited_content += "\\begin{align*}\n"
-                edited_content += matLatex(e)
-                edited_content += "\n\\end{align*}\n"
-        
-        split_contents[2] = edited_content
-        
-        f.seek(0)
-        f.write(''.join(split_contents))
-        f.truncate()
-        
-    
-    subprocess.check_call(["latexmk", "-pdf",str(filename)])
-    subprocess.check_call(["open", filename.split(".")[0]+".pdf"])
-
-# TODO: Find a better substitution algorithm. Problem how to deal with symbols that aren't explicitly grouped
-def replace(expr, rules, debug=False):
-    """
-        Replaces expressions in expr with the given rules.
-    
-        Args:
-            expr - The expression for which we want to replace Matrix Expressions
-            rules - A dictionary where we replace the key with the value.
-                    N.B. For an expression of the form -1*A we must replace it with another expression
-                         of the form -1*B and not A with B.
-    
-        Returns:
-            The expression with the substituted for Matrix Symbols
-    """
-        
-    from collections import deque
-    from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat, SuperMatAdd, SuperMatSymbol
-    
-    # Get the full expression
-    #full_expr = expand_to_fullexpr(expr)
-    full_expr = expr
-    
-    # For each substitution rule, replace the corresponding sub-expression
-    for k, v in rules.items():
-        
-        if debug:
-            print("full_expr: ", full_expr)   
-        
-        m = len(k.args)   # Number of arguments. TODO: Check for cases where k is a single symbol
-        
-        if debug:
-            print("m: ", m)
-        
-        # Table used to build back tree. 
-        #
-        # We pair a key of a sub_expression with an id 'k' that indicates sub_expr was the k'th entry into the table with either:
-        #
-        #       - A list of (sub_expr.args[i], k) tuples indicating the keys from which to search for the
-        #         next expressions in the tree in their correct order:
-        #
-        #                     {(sub_expr, j): [(sub_expr.args[0],m),(sub_expr.args[1],l), ...]}
-        #         
-        #       - A Expr that we substitute in for sub_expr when it is retrieved by higher nodes in the expression tree:
-        #
-        #                     {(sub_expr, j): sub_expr_repl}   
-        #
-        #         where sub_expr_repl is the expression that we replace sub_expr with. It can be sub_expr itself or a replacement
-        #         we define.
-        tree_table = dict()
-        
-        queue = deque(((full_expr, 0, 0),))
-        
-        if debug:
-            print("queue: ", queue)
-        #tree_table[(full_expr,0)] = list(zip(list(full_expr.args),[1]*len(full_expr.args)))
-        
-        num_nodes = 0
-        count = 1
-        while len(queue) > 0:
-            sub_expr, level, old_k = queue.pop()
-            
-            if debug:
-                print("sub_expr: %s, level: %s, old_k: %s" % (sub_expr, level, old_k))
-            
-            if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
-                isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
-                isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
-            
-                # Match current rule to expressions in this sub expression
-                n = len(sub_expr.args)
-                
-                if debug:
-                    print("n: ",n)
-                
-                i = 0
-                while i < n:
-                    j = 0
-                    l = 0    # Used when we need to skip over symbols e.g. for addition where we may need to match over symbols.
-                    while j < m and i + l + j < n:
-                        if debug:
-                            print("i: %s, j: %s, l: %s" % (i,j,l))
-                            
-                        if i + l + j >= n:
-                            break
-                        
-                        if debug:
-                            print("sub_expr.args[%s]: %s, k.args[%s]: %s" % (i+l+j,sub_expr.args[i+l+j], j, k.args[j]))
-                            print("Match? ", sub_expr.args[i+l+j].doit() == k.args[j].doit())
-                            
-                        if (sub_expr.args[i+l+j].doit() != k.args[j].doit()):# or (sub_expr.args[i+l+j].match(k.args[j])):
-                            #foundMatch = False
-                            # As additions may be stored in any order, we need to skip symbols so that we can match
-                            # the pattern
-                            if isinstance(k, MatAdd) and isinstance(sub_expr, MatAdd):
-                                l += 1
-                            else:
-                                break
-                        else:
-                            j += 1
-                    
-                          
-                    if j == m:  # Match found: Replace match with pattern
-                        if debug:
-                            print("Match found!")
-                            
-                        if m == n:
-                            new_level = level
-                        else:
-                            new_level = level + 1
-            
-                        queue.appendleft((v, new_level, count))
-                        
-                        if debug:
-                            print("new_level: ", new_level)
-                            if tree_table.get((sub_expr, level, old_k)):
-                                print("(Before) tree_table[(sub_expr, level, old_k)]: ", tree_table[(sub_expr, level, old_k)])
-                          
-                        # We need to re-order sub_expr - mainly for matches in MatAdds with remainders e.g. matching A in A + B + C
-                        if l > 0:
-                            old_sub_expr = sub_expr
-                            
-                            rem = sub_expr
-                            for c in k.args:
-                                rem -= c
-                            if debug:
-                                print("rem: ", rem)
-                            rem = [rem] if not isinstance(rem,MatAdd) else list(rem.args)
-                            if debug:
-                                print("rem: ", rem)
-                            new_args = list(k.args) + rem
-                            sub_expr = SuperMatAdd(*new_args)
-                            if debug:
-                                print("new sub_expr: ", sub_expr)
-                            
-                            # As we changed the sub_expr we have to reassign the elements of the old one
-                            if tree_table.get((old_sub_expr, level, old_k)):
-                                old_values = tree_table.pop((old_sub_expr, level, old_k), None)
-                                tree_table[(sub_expr, level, old_k)] = old_values + [(v, new_level, count)]
-                            else:
-                                tree_table[(sub_expr, level, old_k)] = [(v, new_level, count)]
-                            
-                            count += 1
-                                
-                        else:    
-                            # Check entry for sub_expr exists
-                            if tree_table.get((sub_expr, level, old_k)):
-                                tree_table[(sub_expr, level, old_k)].append((v, new_level, count))
-                            else:
-                                tree_table[(sub_expr, level, old_k)] = [(v, new_level, count)]
-                            
-                            count += 1
-                        
-
-                        if debug:    
-                            print("(After) tree_table[(sub_expr, level, old_k)]: ", tree_table[(sub_expr, level, old_k)])    
-                            
-                        # Start after pattern     
-                        i += m
-                    else:
-                        queue.appendleft((sub_expr.args[i], level+1, count))
-                        
-                        # Check entry for sub_expr exists
-                        if tree_table.get((sub_expr, level, old_k)):
-                            tree_table[(sub_expr, level, old_k)].append((sub_expr.args[i], level+1, count))
-                        else:
-                            tree_table[(sub_expr, level, old_k)] = [(sub_expr.args[i], level+1, count)]
-                        
-                        count += 1
-                        
-                        # Start at next symbol     
-                        i += 1
-                    
-                    if debug:
-                        print("queue: ",queue)
-                        print("tree_table: ", tree_table) 
-            else:
-                # Add expression for this node
-                tree_table[(sub_expr, level, old_k)] = sub_expr
-                 
-                if debug:
-                    print("tree_table: ", tree_table)        
-        
-        # Create expression from table
-        sorted_tree_table = sorted(tree_table.items(), key=lambda elem: elem[0][1], reverse=True)  # Sort based on level
-        
-        if debug:
-            print("sorted_tree_table: ", sorted_tree_table)
-        
-        for p, c in sorted_tree_table:
-            
-            # Skip terminal nodes else update tree table for non-terminal nodes
-            if p[0] == c:
-                continue
-            else:
-                # Create MatrixExpr using the elements in the value c, which is a list, for the key p and
-                # then update 'tree_table'
-                tree_table[p] = type(p[0])(*[tree_table[e] for e in c])  
-        
-        # Rewrite full expression    
-        full_expr = tree_table[sorted_tree_table[-1][0]]    
-    
-    if debug:   
-        print("final_expr: ",full_expr)
-                    
-    return full_expr
-
-def getMaxDepth(expr, debug=False):
-    """
-        Get the maximum depth of the expression tree down to the lowest symbol 
-    """
-    
-    from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat
-    
-    depth = 0                          
-    stack = [{expr: 0}]
-    
-    while len(stack) > 0:
-        sub_expr, level = list(stack.pop().items())[0]
-        #print("sub_expr: ",srepr(sub_expr))
-        
-        if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
-            isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
-            isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
-            #print(sub_expr.args)
-            for arg in reversed(sub_expr.args):   # TODO: Why do we need to reverse?
-                #print(type(arg),arg)
-                stack.append({arg: level+1})
-            
-            depth = level + 1 if level+1 > depth else depth
-    
-    return depth
-
-def getPermutations(expr, debug=False):
-    """
-        Returns the permutations of a MatAdd expression for lengths 2 to len(expr).
-    
-        For example, for A + B + C + D, we return:
-    
-             [A+B, A+C, A+D, B+C, B+D, C+D, A+B+C, A+B+D, A+C+D, B+C+D, A+B+C+D]
-    
-    """
-    
-    from symgp.superexpressions import SuperMatAdd
-    import itertools
-    
-    if isinstance(expr, MatrixSymbol) or isinstance(expr, Transpose) or isinstance(expr, Inverse):
-        return [expr]
-    
-    if not isinstance(expr, MatAdd):
-        raise Exception("Function only works for MatAdd expressions")
-        
-    expr_args = expr.args
-    
-    expr_perms = []
-    
-    for i in range(2,len(expr_args)+1):
-        expr_perms.extend([SuperMatAdd(*e).doit() for e in itertools.combinations(expr_args,i)])
-    
-    return expr_perms
-
-def acceptInvLemma(e, start, end, debug=False):
+ 
+def accept_inv_lemma(e, start, end, debug=False):
     """
         Checks if expr satisfies the matrix form E^{-1}F(H - GE^{-1}F)^{-1}.
         
@@ -1663,8 +1550,257 @@ def acceptInvLemma(e, start, end, debug=False):
         
     # Successful match
     return True
+                            
+def simplify(expr, debug=False):
+    """
+       A simplification algorithm
+    """ 
+    
+    from symgp.superexpressions import SuperMatSymbol
+    
+    depth = get_max_depth(expand_to_fullexpr(expr))
+    
+    simps = []    # The simplified expressions we have obtained with the associated substitutions
+    subs = {}     # Pairs substituted expressions with the substitutions made
+    usedSubs = []   # The expressions we have substituted we have used so far
+    
+    # Get the expressions at every depth
+    #exprs_by_depth = get_exprs_at_depth(expr, range(depth+1))
+    
+    usedNames = SuperMatSymbol.getUsedNames()
+    
+    if debug:
+        print("depth: ", depth)
+        print("usedNames: ", usedNames)
+    
+    min_expr = expr    
+    for d in range(depth, -1, -1):
+        
+        if debug:
+            print("d: ",d)
+            print("min_expr: ",min_expr)
+            
+        # Get the exprs at each depth for the new shortest expressions
+        exprs_by_depth = get_exprs_at_depth(min_expr, range(depth+1))
+        
+        if debug:
+            print("exprs_by_depth: ", exprs_by_depth)
+            
+        sub_exprs = exprs_by_depth[d]
+        
+        if debug:
+            print("sub_exprs: ", sub_exprs)
+        
+        min_syms = math.inf
+        
+        # For each sub expression at level d check for copies in other parts of expressions
+        for s in sub_exprs:
+            if debug:
+                print("s: ", s)
+            
+            repetitions = 0
+            
+            # Find other similar expressions to s
+            for k in exprs_by_depth.keys():
+                if k == d:
+                    continue
                 
-def getExprsAtDepth(expr, depths, debug=False):
+                if s in exprs_by_depth[k]:    
+                    repetitions += exprs_by_depth[k].count(s)  
+            
+                
+            if debug:
+                print("repetitions: ", repetitions)
+                
+            # Make replacements if expression 's' appears more than twice throughout expression
+            if (repetitions > 0 or accept_inv_lemma(s,0,len(s.args)-1)) and s not in usedSubs:
+                
+                # Update the used substituted expressions
+                usedSubs.append(s)
+                 
+                # TODO: Allow for using best or range of simplified exprs from previous depths
+                                    
+                # Lower case for vectors and upper case for matrices
+                if s.shape[0] != 1 and s.shape[1] != 1:
+                    avail_prefixes = string.ascii_uppercase
+                else:
+                    avail_prefixes = string.ascii_lowercase
+                
+                # Keep on searching for available replacement names  
+                for c in avail_prefixes:
+                    if debug:
+                        print("c: ",c)
+                    i = 0
+                    r_name = c + '_{' + str(i) + '}'
+                    while r_name in usedNames and i < 99:
+                        if debug:
+                            print("r_name: ", r_name)
+                            print("i: ", i)
+                        i += 1
+                        r_name = c + '_{' + str(i) + '}'
+                    
+                    if debug:
+                        print("r_name: ", r_name)
+                                 
+                    if not r_name in usedNames:
+                        r = SuperMatSymbol(s.shape[0], s.shape[1], r_name, expanded=s)
+                        
+                        repl_dict = {s: r}         
+                        simp_expr = replace(min_expr, repl_dict).doit()
+                        
+                        if debug:
+                            print("repl_dict: ", repl_dict)
+                            print("simp_expr: ", simp_expr)
+                            print("min_syms: ", min_syms)
+                    
+                        if not subs.get(s):
+                            subs[s] = r
+                            
+                        simps.append(simp_expr.doit())
+                        
+                        num_syms = get_num_symbols(simp_expr)
+                        if num_syms < min_syms:#repetitions >= max_repetitions:
+                            min_syms = num_syms
+                            #max_repetitions = repetitions
+                            min_expr = simp_expr.doit()
+                         
+                        
+                        
+                        if debug:
+                            print("min_syms: ",min_syms)
+                            print("simps: ", simps)
+                            
+                        # Check if we can collect any symbols on simp_expr
+                        # If we can add to simps
+                        if isinstance(simp_expr, MatAdd):
+                            ends_of_expr_collection = get_ends(simp_expr,debug)
+                            
+                            if debug:
+                                print("ends_of_expr_collection: ", ends_of_expr_collection)
+                                
+                            for ends_of_expr in ends_of_expr_collection:
+                                if debug:
+                                    print("ends_of_expr: ",ends_of_expr)
+                                    
+                                ends_dict_left = defaultdict(list)
+                                ends_dict_right = defaultdict(list)
+                                ends_dict_both = defaultdict(list)
+                            
+                                # Collect left ends and right ends
+                                for l in range(len(ends_of_expr)):
+                                    if len(ends_of_expr[l]) == 2:
+                                        ends_dict_left[ends_of_expr[l][0]].append(l)
+                                        ends_dict_right[ends_of_expr[l][1]].append(l)
+                                        ends_dict_both[ends_of_expr[l]].append(l)
+                                    else:
+                                        ends_dict_left[ends_of_expr[l][0]].append(l)
+                                        ends_dict_right[ends_of_expr[l][0]].append(l)
+                            
+                                if debug:
+                                    print("ends_dict_left: ",ends_dict_left)
+                                    print("ends_dict_right: ",ends_dict_right)
+                                    print("ends_dict_both: ",ends_dict_both)
+                                    print("simps(before): ",simps)
+                                
+                                # If there are two or more repetitions of a symbol, collect        
+                                for key, val in ends_dict_left.items():
+                                    if debug:
+                                        print("simp_expr: ",simp_expr)
+                                        print("key: ",key)
+                                    simped = collect(simp_expr,key,'left').doit()
+                                    if debug:
+                                        print("simped (left): ",simped)
+                                    if len(val) >= 2 and not simped in simps:
+                                        simps.append(simped)
+                            
+                                for key, val in ends_dict_right.items():
+                                    simped = collect(simp_expr,key,'right').doit()
+                                    if debug:
+                                        print("simped (right): ",simped)
+                                    if len(val) >= 2 and not simped in simps:
+                                        simps.append(simped)
+                            
+                                # For cases where both ends are repeated two or more times (e.g. A*P*A + A*Q*A + B), collect
+                                for key, val in ends_dict_both.items():
+                                    simped = collect(simp_expr,[key[0],key[1]],['left','right']).doit()
+                                    if debug:
+                                        print("simped (both): ",simped)
+                                    if len(val) >= 2 and not simped in simps:
+                                        simps.append(simped)
+                            
+                                if debug:
+                                    print("simps (MatAdd): ",simps)          
+                        break
+                
+                
+                # Make replacement if r was created
+                # if 'r' in locals():
+                    
+        
+        #prev_subs += min_subs
+                
+                    
+    return simps, subs            
+                                              
+
+######## Quick creation of variables/constants ########
+def variables(var_names, var_shapes, debug=False):
+    """
+        Creates a tuple of SuperMatSymbol Variables with the given names
+    
+        Args:
+            var_names - The names of each variable. 
+                        Can be a string, list or tuple. 
+                        For a string, the variable names are separated by spaces e.g. "u f fs" for variables with 
+                        names "u", "f" and "fs".
+    
+            var_shapes - The shapes of each variable. 
+                         Can be a list or tuple of tuples. e.g. [(m,n), (p,q), (i,j)] for shapes (m,n), (p,q) and (i,j)
+                         If the variable is a column vector, we simply need to specify one dimension e.g. [m, p, i] for shapes
+                         (m,1), (p,1) and (i,1).
+                         We can also have combinations e.g [m, (p,q), i] 
+
+        Returns:
+            output_vars - A tuple of variables for each 
+    """
+    
+    from symgp.superexpressions import Variable
+    
+    if isinstance(var_names, str):
+        var_names = var_names.split(" ")
+    
+    # Lists must be of same length
+    assert(len(var_names) == len(var_shapes))
+    
+    for i, shape in enumerate(var_shapes):
+        if isinstance(shape, Symbol):
+            var_shapes[i] = (shape,1)
+        
+    #var_shapes = [(shape,1) for shape in var_shapes if isinstance(shape, Symbol)]
+    
+    return (Variable(name, shape[0], shape[1]) for name, shape in zip(var_names, var_shapes))
+        
+def constants(const_names, const_shapes, debug=False):
+
+    from symgp.superexpressions import Constant
+    
+    if isinstance(const_names, str):
+        const_names = const_names.split(" ")
+    
+    # Lists must be of same length
+    assert(len(const_names) == len(const_shapes))
+    
+    for i, shape in enumerate(const_shapes):
+        if isinstance(shape, Symbol):
+            const_shapes[i] = (shape,1)
+        
+    #var_shapes = [(shape,1) for shape in var_shapes if isinstance(shape, Symbol)]
+    
+    return (Constant(name, shape[0], shape[1]) for name, shape in zip(const_names, const_shapes))
+
+
+######## Useful functions to get info about expressions ########
+def get_exprs_at_depth(expr, depths, debug=False):
     """
         Returns the MatAdd and MatMul expressions in expr at levels given by 'depth' of the expression tree.
     
@@ -1698,14 +1834,14 @@ def getExprsAtDepth(expr, depths, debug=False):
                 print("sub_expr: ", sub_expr)
                 
             if isinstance(sub_expr, MatAdd) and len(sub_expr.args) > 2:    # Substitute all permutations of 3 arg MatAdds
-                sub_expr_perms = getPermutations(sub_expr)
+                sub_expr_perms = get_permutations(sub_expr)
                 exprs_at_depths[level].extend(sub_expr_perms)
             elif isinstance(sub_expr, MatMul) and len(sub_expr.args) > 2:    # Substitute 
                 l = len(sub_expr.args)
                 start, end = 0, 2
                 
                 while end < l:
-                    if (acceptInvLemma(sub_expr,start,end, debug)):
+                    if (accept_inv_lemma(sub_expr,start,end, debug)):
                         new_expr = type(sub_expr)(*sub_expr.args[start:end+1])
                         exprs_at_depths[level].append(new_expr)
                         break
@@ -1739,7 +1875,7 @@ def getExprsAtDepth(expr, depths, debug=False):
                 
     return exprs_at_depths
 
-def getEnds(expr, debug=False):
+def get_ends(expr, debug=False):
     """
         Returns the left and right matrices of the args of the MatAdd expression, expr.
     
@@ -1809,7 +1945,7 @@ def getEnds(expr, debug=False):
         for end in ends_mmul:
             if isinstance(end,MatAdd):
                 rem = val[1]
-                match = [elem for elem in getPermutations(val[1],debug) if elem==end]
+                match = [elem for elem in get_permutations(val[1],debug) if elem==end]
                 if debug:
                     print("end: ",end)
                     print("rem: ",rem)
@@ -1866,10 +2002,10 @@ def getEnds(expr, debug=False):
                 if debug:
                     print("l: ",l)
                     
-                perms = [e.doit() for e in getPermutations(SuperMatAdd(*[s[0] for s in singles]).doit()) if len(e.args)==l]
+                perms = [e.doit() for e in get_permutations(SuperMatAdd(*[s[0] for s in singles]).doit()) if len(e.args)==l]
                 
                 if debug:
-                    print("getPermutations(SuperMatAdd(*[s[0] for s in singles]).doit()): ",getPermutations(SuperMatAdd(*[s[0] for s in singles]).doit()))
+                    print("get_permutations(SuperMatAdd(*[s[0] for s in singles]).doit()): ",get_permutations(SuperMatAdd(*[s[0] for s in singles]).doit()))
                     print("perms: ",perms)
                     
                 for p in perms:
@@ -1881,7 +2017,7 @@ def getEnds(expr, debug=False):
                             
     return ends_collection 
 
-def getNumSymbols(expr, debug=False):
+def get_num_symbols(expr, debug=False):
     """
         Returns the number of MatrixSyms in the expression
     """
@@ -1908,198 +2044,7 @@ def getNumSymbols(expr, debug=False):
                 stack.append({arg: level+1})
     
     return numSyms
-           
-def simplify(expr, debug=False):
-    """
-       A simplification algorithm
-    """ 
-    
-    from symgp.superexpressions import SuperMatSymbol
-    
-    depth = getMaxDepth(expand_to_fullexpr(expr))
-    
-    simps = []    # The simplified expressions we have obtained with the associated substitutions
-    subs = {}     # Pairs substituted expressions with the substitutions made
-    usedSubs = []   # The expressions we have substituted we have used so far
-    
-    # Get the expressions at every depth
-    #exprs_by_depth = getExprsAtDepth(expr, range(depth+1))
-    
-    usedNames = SuperMatSymbol.getUsedNames()
-    
-    if debug:
-        print("depth: ", depth)
-        print("usedNames: ", usedNames)
-    
-    min_expr = expr    
-    for d in range(depth, -1, -1):
-        
-        if debug:
-            print("d: ",d)
-            print("min_expr: ",min_expr)
-            
-        # Get the exprs at each depth for the new shortest expressions
-        exprs_by_depth = getExprsAtDepth(min_expr, range(depth+1))
-        
-        if debug:
-            print("exprs_by_depth: ", exprs_by_depth)
-            
-        sub_exprs = exprs_by_depth[d]
-        
-        if debug:
-            print("sub_exprs: ", sub_exprs)
-        
-        min_syms = math.inf
-        
-        # For each sub expression at level d check for copies in other parts of expressions
-        for s in sub_exprs:
-            if debug:
-                print("s: ", s)
-            
-            repetitions = 0
-            
-            # Find other similar expressions to s
-            for k in exprs_by_depth.keys():
-                if k == d:
-                    continue
-                
-                if s in exprs_by_depth[k]:    
-                    repetitions += exprs_by_depth[k].count(s)  
-            
-                
-            if debug:
-                print("repetitions: ", repetitions)
-                
-            # Make replacements if expression 's' appears more than twice throughout expression
-            if (repetitions > 0 or acceptInvLemma(s,0,len(s.args)-1)) and s not in usedSubs:
-                
-                # Update the used substituted expressions
-                usedSubs.append(s)
-                 
-                # TODO: Allow for using best or range of simplified exprs from previous depths
-                                    
-                # Lower case for vectors and upper case for matrices
-                if s.shape[0] != 1 and s.shape[1] != 1:
-                    avail_prefixes = string.ascii_uppercase
-                else:
-                    avail_prefixes = string.ascii_lowercase
-                
-                # Keep on searching for available replacement names  
-                for c in avail_prefixes:
-                    if debug:
-                        print("c: ",c)
-                    i = 0
-                    r_name = c + '_{' + str(i) + '}'
-                    while r_name in usedNames and i < 99:
-                        if debug:
-                            print("r_name: ", r_name)
-                            print("i: ", i)
-                        i += 1
-                        r_name = c + '_{' + str(i) + '}'
-                    
-                    if debug:
-                        print("r_name: ", r_name)
-                                 
-                    if not r_name in usedNames:
-                        r = SuperMatSymbol(s.shape[0], s.shape[1], r_name, expanded=s)
-                        
-                        repl_dict = {s: r}         
-                        simp_expr = replace(min_expr, repl_dict).doit()
-                        
-                        if debug:
-                            print("repl_dict: ", repl_dict)
-                            print("simp_expr: ", simp_expr)
-                            print("min_syms: ", min_syms)
-                    
-                        if not subs.get(s):
-                            subs[s] = r
-                            
-                        simps.append(simp_expr.doit())
-                        
-                        num_syms = getNumSymbols(simp_expr)
-                        if num_syms < min_syms:#repetitions >= max_repetitions:
-                            min_syms = num_syms
-                            #max_repetitions = repetitions
-                            min_expr = simp_expr.doit()
-                         
-                        
-                        
-                        if debug:
-                            print("min_syms: ",min_syms)
-                            print("simps: ", simps)
-                            
-                        # Check if we can collect any symbols on simp_expr
-                        # If we can add to simps
-                        if isinstance(simp_expr, MatAdd):
-                            ends_of_expr_collection = getEnds(simp_expr,debug)
-                            
-                            if debug:
-                                print("ends_of_expr_collection: ", ends_of_expr_collection)
-                                
-                            for ends_of_expr in ends_of_expr_collection:
-                                if debug:
-                                    print("ends_of_expr: ",ends_of_expr)
-                                    
-                                ends_dict_left = defaultdict(list)
-                                ends_dict_right = defaultdict(list)
-                                ends_dict_both = defaultdict(list)
-                            
-                                # Collect left ends and right ends
-                                for l in range(len(ends_of_expr)):
-                                    if len(ends_of_expr[l]) == 2:
-                                        ends_dict_left[ends_of_expr[l][0]].append(l)
-                                        ends_dict_right[ends_of_expr[l][1]].append(l)
-                                        ends_dict_both[ends_of_expr[l]].append(l)
-                                    else:
-                                        ends_dict_left[ends_of_expr[l][0]].append(l)
-                                        ends_dict_right[ends_of_expr[l][0]].append(l)
-                            
-                                if debug:
-                                    print("ends_dict_left: ",ends_dict_left)
-                                    print("ends_dict_right: ",ends_dict_right)
-                                    print("ends_dict_both: ",ends_dict_both)
-                                    print("simps(before): ",simps)
-                                
-                                # If there are two or more repetitions of a symbol, collect        
-                                for key, val in ends_dict_left.items():
-                                    if debug:
-                                        print("simp_expr: ",simp_expr)
-                                        print("key: ",key)
-                                    simped = collect(simp_expr,key,'left').doit()
-                                    if debug:
-                                        print("simped (left): ",simped)
-                                    if len(val) >= 2 and not simped in simps:
-                                        simps.append(simped)
-                            
-                                for key, val in ends_dict_right.items():
-                                    simped = collect(simp_expr,key,'right').doit()
-                                    if debug:
-                                        print("simped (right): ",simped)
-                                    if len(val) >= 2 and not simped in simps:
-                                        simps.append(simped)
-                            
-                                # For cases where both ends are repeated two or more times (e.g. A*P*A + A*Q*A + B), collect
-                                for key, val in ends_dict_both.items():
-                                    simped = collect(simp_expr,[key[0],key[1]],['left','right']).doit()
-                                    if debug:
-                                        print("simped (both): ",simped)
-                                    if len(val) >= 2 and not simped in simps:
-                                        simps.append(simped)
-                            
-                                if debug:
-                                    print("simps (MatAdd): ",simps)          
-                        break
-                
-                
-                # Make replacement if r was created
-                # if 'r' in locals():
-                    
-        
-        #prev_subs += min_subs
-                
-                    
-    return simps, subs            
-                                              
+
 def display_expr_tree(expr, debug=False):
     """
         Visualizes the expression tree for the given expression
@@ -2122,60 +2067,133 @@ def display_expr_tree(expr, debug=False):
                 #print(type(arg),arg)
                 stack.append({arg: level+1})
 
-def variables(var_names, var_shapes, debug=False):
+def get_max_depth(expr, debug=False):
     """
-        Creates a tuple of SuperMatSymbol Variables with the given names
+        Get the maximum depth of the expression tree down to the lowest symbol 
+    """
     
+    from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat
+    
+    depth = 0                          
+    stack = [{expr: 0}]
+    
+    while len(stack) > 0:
+        sub_expr, level = list(stack.pop().items())[0]
+        #print("sub_expr: ",srepr(sub_expr))
+        
+        if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
+            isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
+            isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
+            #print(sub_expr.args)
+            for arg in reversed(sub_expr.args):   # TODO: Why do we need to reverse?
+                #print(type(arg),arg)
+                stack.append({arg: level+1})
+            
+            depth = level + 1 if level+1 > depth else depth
+    
+    return depth
+
+def get_permutations(expr, debug=False):
+    """
+        Returns the permutations of a MatAdd expression for lengths 2 to len(expr).
+    
+        For example, for A + B + C + D, we return:
+    
+             [A+B, A+C, A+D, B+C, B+D, C+D, A+B+C, A+B+D, A+C+D, B+C+D, A+B+C+D]
+    
+    """
+    
+    from symgp.superexpressions import SuperMatAdd
+    import itertools
+    
+    if isinstance(expr, MatrixSymbol) or isinstance(expr, Transpose) or isinstance(expr, Inverse):
+        return [expr]
+    
+    if not isinstance(expr, MatAdd):
+        raise Exception("Function only works for MatAdd expressions")
+        
+    expr_args = expr.args
+    
+    expr_perms = []
+    
+    for i in range(2,len(expr_args)+1):
+        expr_perms.extend([SuperMatAdd(*e).doit() for e in itertools.combinations(expr_args,i)])
+    
+    return expr_perms
+
+def get_var_coeffs(expr, var, debug=False):
+    """ 
+        Returns the coeffs for the given variable and the remainder
+        
         Args:
-            var_names - The names of each variable. 
-                        Can be a string, list or tuple. 
-                        For a string, the variable names are separated by spaces e.g. "u f fs" for variables with 
-                        names "u", "f" and "fs".
+            - 'expr' - The expanded matrix expression
+            - 'var' - List of variables for which we find the coefficients
     
-            var_shapes - The shapes of each variable. 
-                         Can be a list or tuple of tuples. e.g. [(m,n), (p,q), (i,j)] for shapes (m,n), (p,q) and (i,j)
-                         If the variable is a column vector, we simply need to specify one dimension e.g. [m, p, i] for shapes
-                         (m,1), (p,1) and (i,1).
-                         We can also have combinations e.g [m, (p,q), i] 
-
         Returns:
-            output_vars - A tuple of variables for each 
+            - 'coeffs' - A list of coeffs of the variables. Same size as 'var'
+            - 'rem' - The remaining expression (when we subtract the terms corresponding to variables in 'var')
     """
+    from symgp.superexpressions import SuperMatMul, SuperMatAdd
     
-    from symgp.superexpressions import Variable
-    
-    if isinstance(var_names, str):
-        var_names = var_names.split(" ")
-    
-    # Lists must be of same length
-    assert(len(var_names) == len(var_shapes))
-    
-    for i, shape in enumerate(var_shapes):
-        if isinstance(shape, Symbol):
-            var_shapes[i] = (shape,1)
+    if debug:
+        print("expr: ", expr)
+        print("var: ", var)
         
-    #var_shapes = [(shape,1) for shape in var_shapes if isinstance(shape, Symbol)]
+    coeffs = [ZeroMatrix(expr.shape[0],v.shape[0]) for v in var]
     
-    return (Variable(name, shape[0], shape[1]) for name, shape in zip(var_names, var_shapes))
+    if debug:
+        print("coeffs: ", coeffs)
+         
+    # Search the expression tree for each variable in var then add coefficient to list
+    if expr.is_MatAdd:
+        for arg in expr.args:
+            
+            if debug:
+                print("arg: ", arg)
+                
+            if arg in var:
+                for i, v in enumerate(var):
+                    if arg == v:
+                        coeffs[i] = arg.as_coeff_mmul()[0]
+                        if debug:
+                            print("coeffs["+str(i)+"]: ", coeffs[i])
+            else:
+                for arg2 in arg.args:
+                    if debug:
+                        print("arg2: ",arg2)
+                        
+                    if arg2 in var:
+                        for i, v in enumerate(var):
+                            if arg2 == v:
+                                coeffs[i] = SuperMatMul(*[c for c in arg.args if c != arg2]).doit()
+                                if debug:
+                                    print("coeffs["+str(i)+"]: ", coeffs[i])
+        rem = SuperMatAdd(*[c for c in expr.args if c not in [c*v for c,v in zip(coeffs,var)]]).doit()
+    elif expr.is_MatMul:
+        rem = expr
+        for arg in expr.args:
+            if debug:
+                print("arg: ", arg)
+            if arg in var:
+                for i, v in enumerate(var):
+                    if arg == v:
+                        coeffs[i] = SuperMatMul(*[c for c in expr.args if c != v]).doit()
+                        rem = ZeroMatrix(expr.shape[0], expr.shape[1])
         
-def constants(const_names, const_shapes, debug=False):
+    else:
+        rem = expr # If no match is made, we leave remainder as expr
+        for i, v in enumerate(var):
+            if expr == v:
+                coeffs[i] = Identity(expr.shape[0])
+                rem = ZeroMatrix(expr.shape[0],expr.shape[1])
+    
+    if debug:
+        print("rem: ",rem)    
+    
+    return coeffs, rem
 
-    from symgp.superexpressions import Constant
-    
-    if isinstance(const_names, str):
-        const_names = const_names.split(" ")
-    
-    # Lists must be of same length
-    assert(len(const_names) == len(const_shapes))
-    
-    for i, shape in enumerate(const_shapes):
-        if isinstance(shape, Symbol):
-            const_shapes[i] = (shape,1)
-        
-    #var_shapes = [(shape,1) for shape in var_shapes if isinstance(shape, Symbol)]
-    
-    return (Constant(name, shape[0], shape[1]) for name, shape in zip(const_names, const_shapes))
 
+######## GUI lexer ########
 class diag_token:
     def __init__(self, t):
         self.value = t   # 'diag'|'blockdiag'|'blkdiag'

@@ -55,7 +55,7 @@ class MVG(object):
                 self.mean = SuperMatSymbol(self.shape, 1, mat_type='mean', dep_vars=self.variables, cond_vars=self.cond_vars)
                 self.covar = SuperMatSymbol(self.shape, self.shape, mat_type='covar', dep_vars=self.variables, cond_vars=self.cond_vars)
                 
-            self.logZ = utils.getZ(self.covar) if logZ is None else logZ
+            self.logZ = utils.get_Z(self.covar) if logZ is None else logZ
             
             self.n_0 = None
             #self.n_0 = SuperMatAdd(SuperMatMul(Rational(1,2),self.mean.T,self.covar.I,self.mean), SuperMatMul(Rational(1,2),ln(Determinant(self.covar)),Identity(1)))
@@ -617,7 +617,7 @@ class MVG(object):
             
             return MVG(cond_vars, mean=new_cond_mean, cov=new_cond_covar, cond_vars=new_conditioned_vars, prefix=self.prefix)
     
-    def marginalise(self, x):
+    def marginalise(self, x, debug=False):
         
         # Check that this MVG has 2 or more vars
         if len(self.variables) < 2:
@@ -631,6 +631,12 @@ class MVG(object):
                 if self.variables[i] == x[j]:
                     x_loc[j] = i
         
+        x_loc = sorted(x_loc, reverse=True)
+        
+        if debug:
+            print("x: ",x)
+            print("x_loc: ",x_loc)
+        
         if any([i==-1 for i in x_loc]):
             raise Exception("%s is not a variable of this MVG" % x)
                 
@@ -638,17 +644,20 @@ class MVG(object):
         for row in self.covar.blockform:
             new_blockform.append(list(row)) 
 
+        if debug:
+            print("new_blockform: ",new_blockform)
+            
         # Delete down the rows then across the cols
+        num_rows, num_cols = len(new_blockform), len(new_blockform[0])
         
         # Delete cols
-        for row in new_blockform:
-            for idx in x_loc:
-                del row[idx]
+        new_blockform = [[r[idx] for idx in range(num_cols) if idx not in x_loc] for r in new_blockform]
         
+        if debug:
+            print("new_blockform: ", new_blockform)
+            
         # Delete rows
-        for idx in range(len(new_blockform)):
-            if idx in x_loc:
-                del new_blockform[idx]
+        new_blockform = [row for i, row in enumerate(new_blockform) if i not in x_loc]
         
         #for i in range(len(new_blockform)):
         #    for j in range(len(new_blockform[0])):
@@ -658,6 +667,10 @@ class MVG(object):
         new_variables = [v for v in self.variables if v not in x]
         shape = self.covar.shape[0] - sum([var.shape[0] for var in x])
         
+        if debug:
+            print("new_variables: ",new_variables)
+            print("shape: ",shape)
+            
         # Create new moments
         if len(new_variables) > 1:
             new_covar = new_blockform
@@ -667,7 +680,10 @@ class MVG(object):
             new_mean = [self.mean.blockform[i].doit() for i in range(len(self.variables)) if self.variables[i] not in x][0]
             
        
-        new_variables = [v for v in self.variables if v not in x]
+        if debug:
+            print("new_covar: ",new_covar)
+            print("new_mean: ",new_mean)
+
         return MVG(new_variables, mean=new_mean, cov=new_covar, cond_vars=self.cond_vars, prefix=self.prefix)
     
     def changeName(self, name):
