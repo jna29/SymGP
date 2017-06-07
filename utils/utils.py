@@ -1550,7 +1550,14 @@ def accept_inv_lemma(e, start, end, debug=False):
         
     # Successful match
     return True
-                            
+
+def check_inv_lemma(expr):
+    
+    if len(expr.args) == 3 and accept_inv_lemma(expr,0,2):
+        return True
+    else:
+        return False
+                                    
 def simplify(expr, debug=False):
     """
        A simplification algorithm
@@ -1612,8 +1619,9 @@ def simplify(expr, debug=False):
             if debug:
                 print("repetitions: ", repetitions)
                 
-            # Make replacements if expression 's' appears more than twice throughout expression
-            if (repetitions > 0 or accept_inv_lemma(s,0,len(s.args)-1)) and s not in usedSubs:
+            # Make replacements if expression 's' appears more than twice throughout expression or
+            # it corresponds to the special matrix inverse lemma
+            if (repetitions > 0 or check_inv_lemma(s)) and s not in usedSubs:
                 
                 # Update the used substituted expressions
                 usedSubs.append(s)
@@ -1836,20 +1844,27 @@ def get_exprs_at_depth(expr, depths, debug=False):
             if isinstance(sub_expr, MatAdd) and len(sub_expr.args) > 2:    # Substitute all permutations of 3 arg MatAdds
                 sub_expr_perms = get_permutations(sub_expr)
                 exprs_at_depths[level].extend(sub_expr_perms)
-            elif isinstance(sub_expr, MatMul) and len(sub_expr.args) > 2:    # Substitute 
-                l = len(sub_expr.args)
-                start, end = 0, 2
+            elif isinstance(sub_expr, MatMul):    # Substitute 
+                # Remove number at head of expression
+                if isinstance(sub_expr.args[0], Number):
+                    sub_expr = type(sub_expr)(*sub_expr.args[1:])
                 
-                while end < l:
-                    if (accept_inv_lemma(sub_expr,start,end, debug)):
-                        new_expr = type(sub_expr)(*sub_expr.args[start:end+1])
-                        exprs_at_depths[level].append(new_expr)
-                        break
-                    else:
-                        start += 1
-                        end += 1
+                if len(sub_expr.args) > 2:
+                    l = len(sub_expr.args)
+                    start, end = 0, 2
                 
-                if end == l:
+                    while end < l:
+                        if (accept_inv_lemma(sub_expr,start,end, debug)):
+                            new_expr = type(sub_expr)(*sub_expr.args[start:end+1])
+                            exprs_at_depths[level].append(new_expr)
+                            break
+                        else:
+                            start += 1
+                            end += 1
+                
+                    if end == l:
+                        exprs_at_depths[level].append(sub_expr)
+                else:
                     exprs_at_depths[level].append(sub_expr)
             else:
                 exprs_at_depths[level].append(sub_expr)

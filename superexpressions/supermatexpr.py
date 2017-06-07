@@ -500,8 +500,11 @@ class SuperDiagMat(SuperMatBase, MatrixExpr):
         return 'diag['+repr(self.arg)+']'
         
     def __str__(self):
-        return 'diag['+repr(self.arg)+']'
+        return 'diag['+str(self.arg)+']'
     
+    def _sympystr(self, *args, **kwargs):
+        return self.__str__()
+
     def __neg__(self):
         return SuperMatMul(S.NegativeOne, self).doit()
 
@@ -621,6 +624,9 @@ class SuperBlockDiagMat(SuperMatBase, MatrixExpr):
     def __str__(self):
         return 'blockdiag['+repr(self.arg)+']'
     
+    def _sympystr(self, *args, **kwargs):
+        return self.__str__()
+        
     def __neg__(self):
         return SuperMatMul(S.NegativeOne, self).doit()
 
