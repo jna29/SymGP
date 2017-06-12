@@ -155,11 +155,6 @@ class MVG(object):
                 
                 # TO-DO: Make sure variables, means and covars are aligned
                 new_variables = self.variables
-                """if new_variables != other.variables:
-                    new_variables_keys = dict(zip(new_variables,range(len(new_variables))))
-                    other.variables = sorted(other.variables, key=lambda m: new_variables_keys[m])
-                    other.mean.blockform = other.mean.rearrange(new_variables_keys)
-                    other.covar.blockform = other.covar.rearrange(new_variables_keys)"""
                 
                 # Matrix multiply blockforms of means and covariances  
                 new_covar_blockform = utils.matinv(utils.matadd(utils.matinv(self.covar.blockform),utils.matinv(other.covar.blockform)))
@@ -168,7 +163,6 @@ class MVG(object):
                 for i in range(len(new_covar_blockform)):
                     for j in range(len(new_covar_blockform[0])):
                         var_i, var_j = new_variables[i], new_variables[j]
-                        #print("new_")
                         new_covar_blockform[i][j] = SuperMatSymbol(var_i.shape[0], var_j.shape[0], mat_type='covar',dep_vars=[var_i, var_j], 
                                                                         expanded=new_covar_blockform[i][j].doit())
                             
@@ -211,41 +205,22 @@ class MVG(object):
             # each MVG aren't conditioned on in the other MVG.
             if (len(set(self.cond_vars) & svariables2) == 0) and (len(set(other.cond_vars) & svariables1) == 0):
                 
-                # Form dictionary mapping variables to index in precision mat
+                # Get new variables
                 new_variables = comp1+joint12+comp2
-                #variables_keys = dict(zip(new_variables,range(len(new_variables))))
-                
-                # Create conditioned variables as union of other and self
-                #new_conditioned_vars = list(set(self.cond_vars).union(set(other.cond_vars)))
-                #print(new_variables)
                 if len(joint12) > 0:
                     # Form conditionals and marginals for both MVGs
                     self_MVG_cond = self.condition(list(comp1))
-                    #"self_MVG_cond - mean: %s=%s, covar: %s=%s" % (self_MVG_cond.mean,self_MVG_cond.mean.expanded,
-                    #                                                    self_MVG_cond.covar,self_MVG_cond.covar.expanded))
                     self_MVG_marg = self.marginalise(list(joint12))
-                    #print("self_MVG_marg - mean: %s=%s, covar: %s=%s" % (self_MVG_marg.mean,self_MVG_marg.mean.expanded,
-                    #                                                    self_MVG_marg.covar,self_MVG_marg.covar.expanded))
                     other_MVG_cond = other.condition(list(comp2))
-                    #print("other_MVG_cond - mean: %s=%s, covar: %s=%s" % (other_MVG_cond.mean,other_MVG_cond.mean.expanded,
-                    #                                                    other_MVG_cond.covar,other_MVG_cond.covar.expanded))
                     other_MVG_marg = other.marginalise(list(joint12))
-                    #print("other_MVG_marg - mean: %s=%s, covar: %s=%s" % (other_MVG_marg.mean,other_MVG_marg.mean.expanded,
-                    #                                                    other_MVG_marg.covar,other_MVG_marg.covar.expanded))
                 
                     # Multiply conditionals and marginals separately
                     MVG_cond12 = self_MVG_cond*other_MVG_cond
-                    #print("MVG_cond12 - mean: %s=%s, covar: %s=%s" % (MVG_cond12.mean,MVG_cond12.mean.expanded,
-                    #                                                  MVG_cond12.covar,MVG_cond12.covar.expanded))
                     MVG_marg12 = self_MVG_marg*other_MVG_marg
-                    #print("MVG_marg12 - mean: %s=%s, covar: %s=%s" % (MVG_marg12.mean,MVG_marg12.mean.blockform,
-                    #                                                  MVG_marg12.covar,MVG_marg12.covar.blockform))
                 
                     # Multiply all together
                     return MVG_cond12*MVG_marg12
                 else:
-                    #new_covar_blockform = [[ZeroMatrix(i.shape[0],j.shape[0]) for j in new_variables] for i in new_variables]
-                    
                     S_11 = self.covar.blockform
                     if S_11 is None:
                         if not self.covar.expanded is None:
@@ -283,7 +258,6 @@ class MVG(object):
                             mu_1 = [self.mean.expanded]
                         else:
                             mu_1 = [self.mean]
-                    #mu_1 = [self.mean]
                             
                     mu_2 = other.mean.blockform if not other.mean.blockform is None else [other.mean.expanded]
                     if mu_2 is None:
@@ -291,10 +265,8 @@ class MVG(object):
                             mu_2 = [other.mean.expanded]
                         else:
                             mu_2 = [other.mean]
-                    #mu_2 = [other.mean]
                     
                     new_mean_blockform = mu_1 + mu_2
-                    
                     
                     new_conditioned_vars = list(set(self.cond_vars).union(set(other.cond_vars)))
                     
@@ -303,47 +275,6 @@ class MVG(object):
                     
                     return MVG(new_variables, mean=new_mean_blockform, cov=new_covar_blockform, cond_vars=new_conditioned_vars, prefix=new_prefix)
                     
-                
-                """# Form list of new mean vector
-                new_mean = list(smeans1 - (smeans1 & smeans2))+list(smeans1 & smeans2)+list(smeans2 - (smeans1 & smeans2))
-                new_mean = sorted(new_mean, key=lambda m: variables_keys[list(m.variables_dim1.keys())[0]])  #Sort based on the variables corresponding to mean
-                
-                # TO-DO: Create a SuperMatSymbol for ZeroMatrix
-                inv_new_covar_blockform = [[ZeroMatrix(i.shape[0],j.shape[0]) for j in new_variables] for i in new_variables]
-                
-                # Add entries of first inverse covar matrix then apply approp shift to start second
-                self_covar_I = self.covar.I
-                for i in range(len(variables1)):
-                    for j in range(len(variables1)):
-                        var_i, var_j = variables1[i], variables1[j]
-                        if self.covar.blockform is not None:
-                            inv_new_covar_blockform[variables_keys[var_i]][variables_keys[var_j]] += self_covar_I.blockform[i][j] 
-                        else: # for case len(variables1) == 1
-                            inv_new_covar_blockform[variables_keys[var_i]][variables_keys[var_j]] += self_covar_I  
-
-                other_covar_I = other.covar.I
-                for i in range(len(variables2)):
-                    for j in range(len(variables2)):
-                        var_i, var_j = variables2[i], variables2[j]
-                        if other.covar.blockform is not None:
-                            inv_new_covar_blockform[variables_keys[var_i]][variables_keys[var_j]] += other_covar_I.blockform[i][j]
-                        else: # for case len(variables2) == 1
-                            inv_new_covar_blockform[variables_keys[var_i]][variables_keys[var_j]] += other_covar_I # for case len(variables2) == 1
-                
-                
-                # Create new moments
-                new_shape = sum([var.shape[0] for var in new_mean])
-                inv_new_covar = SuperMatSymbol(new_shape,  new_shape, mat_type='invcovar', dep_vars=new_variables, cond_vars=new_conditioned_vars, blockform=inv_new_covar_blockform)
-                new_covar_blockform = inv_new_covar.I.blockform
-                new_covar = SuperMatSymbol(new_shape,  new_shape, mat_type='covar', dep_vars=new_variables, cond_vars=new_conditioned_vars, blockform=new_covar_blockform)
-                
-                new_mean = SuperMatSymbol(new_shape,  1, mat_type='mean', dep_vars=new_variables, cond_vars=new_conditioned_vars, blockform=new_mean)
-                
-                new_logZ = -(new_shape/2)*ln(2*pi) - Rational(1,2)*ln(Determinant(new_covar))
-                
-                new_moments.extend([new_mean, new_covar, new_logZ])
-                
-                return MVG(new_variables, moments=new_moments, cond_vars=new_conditioned_vars)"""
             else: # Case 3: Conditional case
             
                 # Determine the conditional and the marginal
@@ -387,11 +318,9 @@ class MVG(object):
                     p_cond = marginal.marginalise(other_marginal_vars)  # p(b)
                     
                     p_conditional_j_other = conditional*p_other_g_cond  # p(a,c|b)
-                    #print("p_conditional_j_other.mean: (%s)-(%s)" % (p_conditional_j_other.mean, p_conditional_j_other.mean.blockform))
-                    #print("p_conditional_j_other.covar: (%s)-(%s)" % (p_conditional_j_other.covar, p_conditional_j_other.covar.blockform))
                     
                     return p_conditional_j_other*p_cond  # p(a,c|b)p(b)
-                    #raise NotImplementedError("This operation isn't implemented. Conditioned-on variables must be the same variables of marginal")
+                   
                 
                 cond_vars_shape = sum([v.shape[0] for v in cond_vars])
                 
@@ -408,7 +337,6 @@ class MVG(object):
                 # Convert cond_vars to list and sort so as to match vars in marginal
                 cond_vars = list(cond_vars)
                 cond_vars = sorted(cond_vars, key=lambda m: marginal.variables.index(m))
-                #print("cond_vars: ",cond_vars)
             
                 # Create list of new variables and create a dict for ordering variables
                 new_variables = conditional.variables+cond_vars
@@ -436,8 +364,6 @@ class MVG(object):
                         raise Exception("The conditional mean should have an expanded form")
                     
                     Omega, Lambda = utils.get_var_coeffs(expanded_cond_mean, cond_vars)
-                    #print("Omega: ",Omega)
-                    #print("Lambda: ",Lambda)
                     Omega = [Omega]  # 2-D
                     Lambda = [Lambda]  # 1-D
                 else:
@@ -448,7 +374,6 @@ class MVG(object):
                         # The remainder is collected in Lambda
                         Omega, Lambda = [], []                                             
                         for i in range(len(conditional.variables)):
-                            #print(conditional.variables[i])
                             if (not (isinstance(conditional.mean.blockform[i], SuperMatSymbol) or 
                                 isinstance(conditional.mean.blockform[i], SuperMatInverse) or
                                 isinstance(conditional.mean.blockform[i], SuperMatTranspose)) or 
@@ -473,14 +398,8 @@ class MVG(object):
                 else:
                     marginal_mean = marginal.mean.blockform
                 
-                #print("Lambda: ", Lambda)
-                #print("Omega: ",Omega)
-                #print("marginal_mean: ",marginal_mean)
-                #print("utils.matmul(Omega,marginal_mean): ",utils.matmul(Omega,marginal_mean))
                 new_mean_blockform = utils.matadd(Lambda,utils.matmul(Omega,marginal_mean))+marginal_mean
                 new_mean = [m.doit() for m in new_mean_blockform]
-                #new_mean_blockform = [m[0] for m in new_mean_blockform]
-                
                 
                 # Create new covar blockform
                 if conditional.covar.blockform is None:
@@ -499,19 +418,10 @@ class MVG(object):
                 else:
                     marginal_covar = marginal.covar.blockform
                 
-                """print("utils.matmul(Omega,marginal_covar): ",utils.matmul(Omega,marginal_covar))
-                print("utils.matmul(utils.matmul(Omega,marginal_covar),utils.mattrans(Omega)): ",utils.matmul(utils.matmul(Omega,marginal_covar),utils.mattrans(Omega)))
-                print("conditional_covar: ",conditional_covar)
-                print("marginal_covar: ",marginal_covar)"""
-                #print("Omega: ",srepr(Omega[0][0]))
                 S_11 = utils.matadd(conditional_covar,utils.matmul(utils.matmul(Omega,marginal_covar),utils.mattrans(Omega)))
-                #print("S_11: ",S_11)
                 S_12 = utils.matmul(Omega,marginal_covar)
-                #print("S_12: ",S_12)
                 S_21 = utils.mattrans(S_12)
-                #print("S_21: ",S_21)
                 S_22 = marginal_covar
-                #print("S_22: ",S_22)
                 
                 # Create new matrix by top bottom method i.e. create top half of matrix then create bottom
                 top = []
@@ -528,15 +438,10 @@ class MVG(object):
                 for i in range(len(new_covar_blockform)):
                     for j in range(len(new_covar_blockform[0])):
                         var_i, var_j = new_variables[i], new_variables[j]
-                        #print("new_")
                         new_covar_blockform[i][j] = SuperMatSymbol(var_i.shape[0], var_j.shape[0], mat_type='covar',dep_vars=[var_i, var_j], 
                                                                         expanded=new_covar_blockform[i][j].doit())
-                        #print("new_covar_blockform[%s][%s]: %s" % (i,j,new_covar_blockform[i][j].expanded))
                                                             
                 new_covar = new_covar_blockform
-                                        
-                
-                #print("Cond multiplication done")
                 
                 # Choose new class prefix
                 new_prefix = self.prefix if self.prefix != MVG.DEFAULT_PREFIX else other.prefix
@@ -617,7 +522,7 @@ class MVG(object):
             
             return MVG(cond_vars, mean=new_cond_mean, cov=new_cond_covar, cond_vars=new_conditioned_vars, prefix=self.prefix)
     
-    def marginalise(self, x, debug=False):
+    def marginalise(self, x):
         
         # Check that this MVG has 2 or more vars
         if len(self.variables) < 2:
@@ -633,43 +538,25 @@ class MVG(object):
         
         x_loc = sorted(x_loc, reverse=True)
         
-        if debug:
-            print("x: ",x)
-            print("x_loc: ",x_loc)
-        
         if any([i==-1 for i in x_loc]):
             raise Exception("%s is not a variable of this MVG" % x)
                 
         new_blockform = []
         for row in self.covar.blockform:
             new_blockform.append(list(row)) 
-
-        if debug:
-            print("new_blockform: ",new_blockform)
             
         # Delete down the rows then across the cols
         num_rows, num_cols = len(new_blockform), len(new_blockform[0])
         
         # Delete cols
         new_blockform = [[r[idx] for idx in range(num_cols) if idx not in x_loc] for r in new_blockform]
-        
-        if debug:
-            print("new_blockform: ", new_blockform)
             
         # Delete rows
         new_blockform = [row for i, row in enumerate(new_blockform) if i not in x_loc]
         
-        #for i in range(len(new_blockform)):
-        #    for j in range(len(new_blockform[0])):
-        #        new_blockform[i][j] = new_blockform[i][j].expanded
-        
         # New variables
         new_variables = [v for v in self.variables if v not in x]
         shape = self.covar.shape[0] - sum([var.shape[0] for var in x])
-        
-        if debug:
-            print("new_variables: ",new_variables)
-            print("shape: ",shape)
             
         # Create new moments
         if len(new_variables) > 1:
@@ -679,10 +566,6 @@ class MVG(object):
             new_covar = new_blockform[0][0]
             new_mean = [self.mean.blockform[i].doit() for i in range(len(self.variables)) if self.variables[i] not in x][0]
             
-       
-        if debug:
-            print("new_covar: ",new_covar)
-            print("new_mean: ",new_mean)
 
         return MVG(new_variables, mean=new_mean, cov=new_covar, cond_vars=self.cond_vars, prefix=self.prefix)
     

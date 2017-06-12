@@ -21,7 +21,7 @@ class KernelMatrix(SuperMatBase, MatrixSymbol):
     
     _op_priority = 10000
     
-    def __new__(cls, name, m, n, inputs, kernel):
+    def __new__(cls, name, m, n, inputs, kernel, expanded=None):
         
         if name == '':
             name = kernel.name+'(' + ','.join([i.name for i in inputs]) + ')'
@@ -29,7 +29,7 @@ class KernelMatrix(SuperMatBase, MatrixSymbol):
         
         return obj
     
-    def __init__(self, name, m, n, inputs, kernel):
+    def __init__(self, name, m, n, inputs, kernel, expanded=None):
         
         """
             Initialize a KernelMatrix object
@@ -41,6 +41,8 @@ class KernelMatrix(SuperMatBase, MatrixSymbol):
                 kernel - The covariance function that this matrix corresponds to
         """
         self.K_func = kernel
+        self.dep_vars = inputs
+        self.expanded = expanded
         
     def doit(self, **hints):
         if hints.get('deep', True):
@@ -66,6 +68,12 @@ class KernelMatrix(SuperMatBase, MatrixSymbol):
         return SuperMatInverse(self)
     
     I = property(inverse, None, None, 'Matrix inversion')
+    
+    def to_full_expr(self):
+        if self.expanded:
+            return self.expanded
+        else:
+            return self
            
 class Kernel(object):
     
@@ -91,52 +99,7 @@ class Kernel(object):
         self.type = kernel_type
         self.M = mat
         self.name = name
-        
-    def K(self, xi, xj):
-        """
-            Evaluate kernel for given inputs
-        
-            Args:
-                xi, xj - SuperMatSymbols of shapes (d, ni) and (d, nj) respectively where
-                         d is the dimension of each vector and ni, nj are the number of vectors
-        
-            Returns:
-                A KernelMatrix object that represents the covariance between the inputs
-                         
-        """
-        #print(self.type)
-        if self.type == 'mul':
-            left_kern = self.sub_kernels[0]
-            right_kern = self.sub_kernels[1]
             
-            if self.M is not None:
-                u = self.M.dep_vars[0]
-                #print("u: ",u)
-                left_kern_mat = left_kern.K(xi,u)
-                right_kern_mat = right_kern.K(u,xj)
-                #print("M: ",self.M)
-                M = self.M if self.M.expanded is None else self.M.expanded
-                return left_kern_mat*M*right_kern_mat
-            else:
-                left_kern_mat = left_kern.K(xi,xj)
-                right_kern_mat = right_kern.K(xi,xj)
-                return HadamardProduct(left_kern_mat, right_kern_mat)
-                        
-        elif self.type == 'add' or self.type == 'sub':
-            left_kern = self.sub_kernels[0]
-            right_kern = self.sub_kernels[1]
-            
-            left_kern_mat = left_kern.K(xi,xj)
-            right_kern_mat = right_kern.K(xi,xj)
-            
-            if self.type == 'add':
-                return left_kern_mat + right_kern_mat
-            else:
-                return left_kern_mat - right_kern_mat
-            
-        else: # self.type == 'nul'
-            return KernelMatrix('',xi.shape[1],xj.shape[1],[xi, xj],kernel=self)
-        
     def __call__(self, xi, xj):
         
         return self.K(xi,xj)
@@ -177,3 +140,55 @@ class Kernel(object):
     def __rmul__(self, other):
         name = other.__repr__() + '*' + self.__repr__()
         return Kernel([other, self], 'mul', name=name)
+    
+    def K(self, xi, xj):
+        """
+            Evaluate kernel for given inputs
+        
+            Args:
+                xi, xj - SuperMatSymbols of shapes (d, ni) and (d, nj) respectively where
+                         d is the dimension of each vector and ni, nj are the number of vectors
+        
+            Returns:
+                A KernelMatrix object that represents the covariance between the inputs
+                         
+        """
+        if self.type == 'mul':
+            left_kern = self.sub_kernels[0]
+            right_kern = self.sub_kernels[1]
+            
+            if self.M is not None:
+                u = self.M.dep_vars[0]
+                left_kern_mat = left_kern.K(xi,u)
+                right_kern_mat = right_kern.K(u,xj)
+                M = self.M if self.M.expanded is None else self.M.expanded
+                expanded = left_kern_mat*M*right_kern_mat
+            else:
+                left_kern_mat = left_kern.K(xi,xj)
+                right_kern_mat = right_kern.K(xi,xj)
+                expanded = HadamardProduct(left_kern_mat, right_kern_mat)
+            
+            return KernelMatrix('',xi.shape[0],xj.shape[0],inputs=[xi, xj],kernel=self,expanded=expanded)
+        elif self.type == 'add' or self.type == 'sub':
+            left_kern = self.sub_kernels[0]
+            right_kern = self.sub_kernels[1]
+            
+            left_kern_mat = left_kern.K(xi,xj)
+            right_kern_mat = right_kern.K(xi,xj)
+            
+            if self.type == 'add':
+                expanded = left_kern_mat + right_kern_mat
+            else:
+                expanded = left_kern_mat - right_kern_mat
+            
+            return KernelMatrix('',xi.shape[0],xj.shape[0],inputs=[xi, xj],kernel=self,expanded=expanded)
+            
+        else: # self.type == 'nul'
+            return KernelMatrix('',xi.shape[1],xj.shape[1],[xi, xj],kernel=self)
+    
+    def get_M(self):
+        """
+            Get the middle M matrix if it exists
+        """
+        M = self.M if self.M.expanded is None else self.M.to_full_expr()
+        return M

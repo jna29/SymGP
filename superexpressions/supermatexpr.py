@@ -20,15 +20,9 @@ SMALL_ETA_GREEK = '\u03b7'
 
 class SuperMatSymbol(SuperMatBase, MatrixSymbol):
     
-    """mean_count = 0
-    covar_count = 0
-    invcovar_count = 0
-    var_count = 0"""
     _op_priority = 99
     _used_names = []
-    #_available_names = [l for l in string.ascii_letters]
     
-    ## TODO: Maybe change constructor to get rid of name  
     def __new__(cls, m, n, name='', mat_type='other', dep_vars=[], cond_vars=[], expanded=None, blockform=None):
         """
             The SuperMatSymbol constructor.
@@ -114,8 +108,9 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
         else:
             if len(cond_vars) > 0 and len(cond_vars) < 0:
                 raise Warning("cond_vars should only be set for mat_type = {'covar', 'invcovar', 'mean', 'natmean', 'precision'}")
-
-        SuperMatSymbol._used_names.append(name)
+        
+        if name not in SuperMatSymbol._used_names:
+            SuperMatSymbol._used_names.append(name)
         
         return MatrixSymbol.__new__(cls, name, m, n)
     
@@ -162,11 +157,6 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
                         if dep_vars[j] not in self.variables_dim2:
                             self.variables_dim2[dep_vars[j]] = j
         
-        #print("Creating: ",self.name)
-        #print("expanded: ",self.expanded)
-        #print("blockform: ",self.blockform)
-        
-    
     # We have to change MatrixSymbol.doit so that objects are constructed appropriately
     # Modeled off MatrixSymbol.doit in https://github.com/sympy/sympy/blob/master/sympy/matrices/expressions/matexpr.py
     def doit(self, **hints):
@@ -208,10 +198,6 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
                 assert (all([i>=0 and i < len(self.blockform[0]) for i in indices[1]])), "Invalid first set of indices"
                 
                 P, Q, R, S = utils.partition_block(self.blockform, indices)
-                #print("P: ",P)
-                #print("Q: ",Q)
-                #print("R: ",R)
-                #print("S: ",S)
                     
                 # Sort the variables based on their index in 'self.blockform'
                 variables_dim1_keys = sorted(self.variables_dim1.keys(),key=lambda m: self.variables_dim1[m])
@@ -219,13 +205,9 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
                     
                 # Get variables for both sets in both dimensions 
                 indices_vars_dim1 = [v for v in variables_dim1_keys if self.variables_dim1[v] in indices[0]]
-                #print("indices_vars_dim1: ",indices_vars_dim1)
                 indices_vars_dim2 = [v for v in variables_dim2_keys if self.variables_dim2[v] in indices[1]]
-                #print("indices_vars_dim2: ",indices_vars_dim2)
                 rem_vars_dim1 = [v for v in variables_dim1_keys if self.variables_dim1[v] not in indices[0]]
-                #print("rem_vars_dim1: ",rem_vars_dim1)
                 rem_vars_dim2 = [v for v in variables_dim2_keys if self.variables_dim2[v] not in indices[1]]
-                #print("rem_vars_dim2: ",rem_vars_dim2)
                     
                 # Get shapes of two sets in both dimensions
                 m1 = sum([v.shape[0] for v in rem_vars_dim1])
@@ -234,15 +216,10 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
                 n2 = sum([v.shape[0] for v in indices_vars_dim2])
                     
                 # Create partition symbols. self.mat_type = {'covar','invcovar','precision','other'} ('other' must be 2-D)
-                #print("self.covar.name: ",self.name)
                 P = SuperMatSymbol(m1,n1,mat_type=self.mat_type, dep_vars=rem_vars_dim1, blockform=P)
-                #print("P.name: ",P.name)
                 Q = SuperMatSymbol(m1,n2,mat_type=self.mat_type, dep_vars=[rem_vars_dim1, indices_vars_dim2], blockform=Q)
-                #print("Q.name: ",Q.name)
                 R = SuperMatSymbol(m2,n1,mat_type=self.mat_type, dep_vars=[indices_vars_dim1, rem_vars_dim2], blockform=R)
-                #print("R.name: ",R.name)
                 S = SuperMatSymbol(m2,n2,mat_type=self.mat_type, dep_vars=indices_vars_dim1, blockform=S)
-                #print("S.name: ",S.name)
                     
                 return P,Q,R,S  
                         
@@ -354,7 +331,6 @@ class SuperMatSymbol(SuperMatBase, MatrixSymbol):
     def getUsedNames():
         return SuperMatSymbol._used_names
         
-    
     @staticmethod
     def used(name):
         """
@@ -546,22 +522,6 @@ class SuperDiagMat(SuperMatBase, MatrixExpr):
             return SuperDiagMat(SuperMatAdd(other, -self.arg).doit()).doit()
         else:
             return SuperMatAdd(other, -self).doit()
-    
-    """@call_highest_priority('__rmul__')
-    def __mul__(self, other):
-        return SuperMatMul(self, other).doit()
-    
-    @call_highest_priority('__rmul__')
-    def __matmul__(self, other):
-        return SuperMatMul(self, other).doit()
-   
-    @call_highest_priority('__mul__')
-    def __rmul__(self, other):
-        return SuperMatMul(other, self).doit()
-    
-    @call_highest_priority('__mul__')
-    def __rmatmul__(self, other):
-        return SuperMatMul(other, self).doit()"""
         
     def inverse(self):
         return SuperMatInverse(self)
@@ -668,22 +628,6 @@ class SuperBlockDiagMat(SuperMatBase, MatrixExpr):
             return SuperBlockDiagMat(SuperMatAdd(other, -self.arg).doit()).doit()
         else:
             return SuperMatAdd(other, -self).doit()
-
-    """@call_highest_priority('__rmul__')
-    def __mul__(self, other):
-        return SuperMatMul(self, other).doit()
-  
-    @call_highest_priority('__rmul__')
-    def __matmul__(self, other):
-        return SuperMatMul(self, other).doit()
-    
-    @call_highest_priority('__mul__')
-    def __rmul__(self, other):
-        return SuperMatMul(other, self).doit()
-    
-    @call_highest_priority('__mul__')
-    def __rmatmul__(self, other):
-        return SuperMatMul(other, self).doit()"""
     
     def inverse(self):
         return SuperMatInverse(self)
