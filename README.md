@@ -14,4 +14,5 @@ See examples in folder notebooks
 ## Things to improve
 
 - Allow `utils.replace` to replace expressions of the form `D+A` in `D+2*A` with `C` to give `A+C`.
-- Provide functionality for `utils.simplify` to 
+- Provide functionality for `utils.simplify` to replace expressions composed of `KernelMatrix`s e.g.  
+   if `Q({v1},{v2}) = K({v1},u)*K()` 
