@@ -3,7 +3,7 @@ A symbolic algebra library for multivariate Gaussian and Gaussian process probab
 
 ## Installation
 
-Install from PyPi as:
+Install from PyPi using the following command:
 
 `sudo pip install symgp`
 
