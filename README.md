@@ -13,4 +13,5 @@ See examples in folder notebooks
 
 ## Things to improve
 
-- Allow `utils.replace` 
+- Allow `utils.replace` to replace expressions of the form `D+A` in `D+2*A` with `C` to give `A+C`.
+- Provide functionality for `utils.simplify` to 
