@@ -1,6 +1,3 @@
-#import sys
-#sys.path.insert(0, "/Users/jaduol/Documents/Uni (original)/Part II/IIB/MEng Project/Code")  # Hack to allow SuperMatExpr to be imported
-
 from sympy import MatrixSymbol, sympify, Basic, HadamardProduct, S
 from sympy.core.decorators import call_highest_priority
 
@@ -95,13 +92,17 @@ class Kernel(object):
                 name - Name of the kernel
         """
         
+        # Check validity of arguments
+        if len(sub_kernels) != 2 or len(sub_kernels) != 0:
+            raise Exception("sub_kernels should have only two elements or be empty (for a base Kernel)")
+        
+        
         self.sub_kernels = sub_kernels
         self.type = kernel_type
         self.M = mat
         self.name = name
             
     def __call__(self, xi, xj):
-        
         return self.K(xi,xj)
     
     def __repr__(self):
