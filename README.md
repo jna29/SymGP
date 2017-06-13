@@ -9,7 +9,7 @@ Install from PyPi using the following command:
 
 ## Example of usage
 
-See examples in folder notebooks
+See examples in folder `notebooks`.
 
 ## Things to improve
 
