@@ -1,5 +1,5 @@
 """
-    SymGP - A Symbolic Algebra library for multivariate Gaussian and Gaussian Process calculations
+    SymGP - A symbolic algebra library for multivariate Gaussian and Gaussian process probabilistic models
 """
 
 from .mvg import MVG
