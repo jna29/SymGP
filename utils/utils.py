@@ -2146,6 +2146,25 @@ def get_var_coeffs(expr, var):
     
     return coeffs, rem
 
+def create_blockform(A,B,C,D):
+    """
+        Create new matrix by top bottom method i.e. create top half of matrix then create bottom
+    
+        Args:
+            A, B, C, D - The four partitions of the block matrix. Must be 2-D i.e. all of form [[.]]
+    
+        Returns:
+            The full blockform i.e. [[A, B], [C, D]]
+    """ 
+    top = []
+    for row1, row2 in zip(A,B):
+        top.append(row1+row2)
+
+    bottom = []
+    for row1, row2 in zip(C,D):
+        bottom.append(row1+row2)
+            
+    return top+bottom
 
 ######## GUI lexer ########
 class diag_token:
