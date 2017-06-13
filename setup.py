@@ -9,5 +9,5 @@ setup(
   url = 'https://github.com/jna29/SymGP/', # use the URL to the github repo
   download_url = 'https://github.com/jna29/SymGP/archive/0.0.1.tar.gz', # I'll explain this in a second
   keywords = ['testing', 'logging', 'example'], # arbitrary keywords
-  classifiers = [],
+  classifiers = []
 )
