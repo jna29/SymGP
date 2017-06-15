@@ -2166,6 +2166,31 @@ def create_blockform(A,B,C,D):
             
     return top+bottom
 
+def get_variables(expr):
+    """
+        Returns a list of all the 'Variable' objects in the given expr.
+    """
+    
+    from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat, Variable
+    
+    variables_in_expr = []                      
+    stack = [(expr, 0)]
+    
+    while len(stack) > 0:
+        sub_expr, level = stack.pop()
+        
+        if isinstance(sub_expr, Variable) and sub_expr not in variables_in_expr:
+            variables_in_expr.append(sub_expr)
+        
+        if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
+            isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
+            isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
+            for arg in reversed(sub_expr.args):   # TODO: Why do we need to reverse?
+                stack.append((arg, level+1))
+    
+    return variables_in_expr
+    
+    
 ######## GUI lexer ########
 class diag_token:
     def __init__(self, t):

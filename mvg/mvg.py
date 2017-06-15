@@ -23,19 +23,25 @@ class MVG(object):
                 - 'mean', 'cov', 'logZ' - The expanded/blockform expressions for the mean, covariance and log-normalising constant expressions.
                                             If logZ isn't specified, it is automatically created.
                 - 'n0', 'n1', 'n2' - The parameters of the MVG in natural parameter form. (Not used)
-                - 'cond_vars' - The variables this MVG is conditioned on.
+                - 'cond_vars' - The variables this MVG is conditioned on.  
                 - 'prefix' - Changes the prefix of a distribution. Default is 'p'. Must be in LaTeX suitable form.
         """
         
         self.variables = list(variables)
-        self.conditioned = (len(cond_vars) > 0)
-        self.cond_vars = cond_vars
         self.shape = sum([v.shape[0] for v in self.variables])
+        
+        if isinstance(mean,list):
+            self.cond_vars = []
+            for e in mean:
+                self.cond_vars.extend(utils.get_variables(e))
+            self.cond_vars = list(set(self.cond_vars))
+        else:
+            self.cond_vars = utils.get_variables(mean) if mean else cond_vars
         
         # Create distribution name
         self.prefix = prefix
         self.name = prefix+'('+','.join([v.name for v in self.variables])
-        if len(cond_vars) > 0:
+        if len(self.cond_vars) > 0:
             self.name += '|'+','.join([v.name for v in self.cond_vars])
         self.name += ')'
         
@@ -238,7 +244,6 @@ class MVG(object):
         # Choose new class prefix
         new_prefix = self.prefix if self.prefix != MVG.DEFAULT_PREFIX else other.prefix
         
-        
         return MVG(new_variables, mean=new_mean_blockform, cov=new_covar_blockform, cond_vars=new_conditioned_vars, prefix=new_prefix)
     
     def _mul_conditional_case(self, other, sets, vars_12):
@@ -249,9 +254,6 @@ class MVG(object):
             
         """
         
-        comp1, joint12, comp2 = sets
-        svariables1, svariables2 = vars_12    # Sets of variables
-        
         def _get_conditional_and_marginal(self, other, svars1, svars2):
             if (len(set(self.cond_vars) & svars2) != 0) and (len(set(other.cond_vars) & svars1) == 0):
                 return self, other
@@ -259,6 +261,9 @@ class MVG(object):
                 return other, self
             else:
                 raise NotImplementedError("This conditional case isn't supported")
+        
+        comp1, joint12, comp2 = sets
+        svariables1, svariables2 = vars_12    # Sets of variables
         
         conditional, marginal = _get_conditional_and_marginal(self, other, svariables1, svariables2)
         
