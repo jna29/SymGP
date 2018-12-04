@@ -1,10 +1,17 @@
+
 from __future__ import print_function, division
 
+from typing import Union, Optional, List, Iterable, Dict, Any
 from collections import defaultdict
+from abc import ABCMeta
 import copy
 import re
 import string
 import math
+import logging
+import sys
+
+import numpy as np
 
 from sympy import (MatMul, MatAdd, Basic, MatrixExpr, MatrixSymbol, ZeroMatrix, Symbol, Identity, Transpose,
                    Inverse, Number, Rational, ln, Determinant, pi, sympify, srepr, S, Expr, Matrix)
@@ -21,6 +28,14 @@ BIG_OMEGA_GREEK = '\u03a9'
 BIG_LAMBDA_GREEK = '\u039b'
 SMALL_ETA_GREEK = '\u03b7' 
 
+LOG = logging.getLogger(__name__)
+LOG.setLevel(logging.INFO)
+
+ch = logging.StreamHandler(sys.stdout)
+ch.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+LOG.addHandler(ch)
 
 ######## Matrix operations with lists as matrices ########
 def _mul_with_num(num, mat):
@@ -106,11 +121,7 @@ def matmul(list1, list2):
         
     if isinstance(list2, int):
         return _mul_with_num(list2, list1)
-    
-    
-    broadcast_list1 = False
-    broadcast_list2 = False
-    
+
     # Check sizes and reshape if necessary
     m1, n1, broadcast_list1 = _check_shape_matmul(list1, 'left')
     m2, n2, broadcast_list2 = _check_shape_matmul(list2, 'right')
@@ -138,7 +149,7 @@ def matmul(list1, list2):
            
     return out_list
 
-def _check_shape_matadd(mat):  
+def _check_shape_matadd(mat):
     """
         Determines matrix shape of given matrix (as defined in matmul) 'mat'
     
@@ -275,7 +286,7 @@ def _copy_block(block):
     
     return new_block
 
-def _is_matrix(block):
+def is_matrix(block):
     """
         Returns true if block is a matrix.
     
@@ -285,7 +296,21 @@ def _is_matrix(block):
     
     return (all([isinstance(r,list) for r in block]) and all([len(block[0])==len(r) for r in block]))
 
-def _is_vector(block):
+def is_1d_vector(block):
+    """
+    Returns True if ``block is a 1-d list.
+    :param block: A list.
+    """
+    return all([not isinstance(e, list) for e in block])
+
+def is_2d_vector(block):
+    """
+    Returns True if ``block is a 2-d list.
+    :param block: A list.
+    """
+    return all([isinstance(r, list) for r in block]) and all([len(r) == 1 for r in block])
+
+def is_vector(block):
     """
         Returns true if block is a vector.
     
@@ -294,15 +319,14 @@ def _is_vector(block):
             - A Python list of lists where each list has length 1 e.g. [[a],[b],[c]]
     """
     
-    return ((all([not isinstance(e,list) for e in block])) or \
-            (all([isinstance(r,list) for r in block]) and all([len(r)==1 for r in block])))
+    return is_1d_vector(block) or is_2d_vector(block)
 
-def _is_square(block):
+def is_square(block):
     """
         Determines whether block is a square matrix.
     """    
     
-    return _is_matrix(block) and (len(block[0])==len(block))
+    return is_matrix(block) and (len(block[0]) == len(block))
 
 def _move_cols_to_end(block, indices):
     """
@@ -405,18 +429,18 @@ def partition_block(block, indices):
     
     
     # Check block is a correct block matrix/vector ([[...],[...]] or [...])
-    if not (_is_matrix(block) or _is_vector(block)):
+    if not (is_matrix(block) or is_vector(block)):
         raise Exception("The block to be partitioned must be a matrix ([[A,B], [C,D]]) or \
                          vector ([a,b] or [[a],[b]])")
     
     # Copy block    
     new_block = _copy_block(block)
     
-    if _is_matrix(new_block) and not _is_vector(new_block):
+    if is_matrix(new_block) and not is_vector(new_block):
         num_rows, num_cols = len(new_block), len(new_block[0])
         
         # Check indices are appropriate for matrix
-        if (all([isinstance(e,int) for e in indices]) and _is_square(new_block)):
+        if (all([isinstance(e,int) for e in indices]) and is_square(new_block)):
             indices = [indices, indices]   # Convert to 2-D
         else:
             if not all([isinstance(e,list) for e in indices]):
@@ -464,7 +488,7 @@ def partition_block(block, indices):
             raise Exception("Can't partition a 1x1 block")
         
         # Check indices are appropriate for vector
-        if _is_vector(indices):
+        if is_vector(indices):
             if all([isinstance(e,list) for e in indices]):   # Convert to 1-D list
                 indices = [e[0] for e in indices]
         else:
@@ -488,9 +512,9 @@ def partition_block(block, indices):
 
 
 ######## MVG helper functions ########
-def get_Z(cov):
+def get_logZ(cov):
     """
-        Calculates normalising constant symbol using cov
+    Calculates log-normalising constant symbol using cov
     """
     return -cov.shape[0]/2*ln(2*pi) - Rational(1,2)*ln(Determinant(cov))
 
@@ -583,11 +607,11 @@ def evaluate_expr(expr, d):
             - 'r' - The result of all the matrix calculations
     """
     
-    r = replace_with_num(expr, d, debug)
+    r = replace_with_num(expr, d)
     
     return r
     
-def replace_with_expanded(expr, done=True):
+def replace_with_expanded(expr, done=True, excluded=None):
     """
         Similar to 'replace_with_num' above except we replace SuperMatrixSymbols
         with their expanded forms if they exist
@@ -602,14 +626,14 @@ def replace_with_expanded(expr, done=True):
     
     from symgp.superexpressions import (SuperMatSymbol, SuperMatTranspose, SuperMatInverse, SuperMatAdd, 
                                         SuperMatMul, SuperDiagMat, SuperBlockDiagMat)
-    
+    from symgp.kernels.kernel import KernelMatrix
      
     if (isinstance(expr, MatMul) or isinstance(expr, MatAdd) or 
         isinstance(expr, Inverse) or isinstance(expr, Transpose)):
         
         sub_exprs = []
         for arg in expr.args:
-            expanded, done = replace_with_expanded(arg, done)
+            expanded, done = replace_with_expanded(arg, done, excluded=excluded)
             sub_exprs.append(expanded)
             
         if expr.is_MatMul:
@@ -622,37 +646,40 @@ def replace_with_expanded(expr, done=True):
             e = SuperMatTranspose(*sub_exprs)
         
         return e, done
+    elif excluded is not None and any([isinstance(expr, c) for c in excluded]):
+        return expr, done
     elif isinstance(expr, SuperMatSymbol) and expr.expanded is not None:
-        done = False
-        return expr.expanded, done
+        return expr.expanded, False
     else:
         return expr, done
 
-def expand_to_fullexpr(expr, num_passes=-1):
+def expand_to_fullexpr(expr, num_passes=-1, excluded=None):
     """
         Expands a MatrixExpr composed of SuperMatSymbols by substituting any SuperMatSymbol
-        with an 'expanded' or 'blockform'
+        with an 'expanded'
     
         Args:
             expr - The expression to expand
             num_passes - The number of passes to make through the expression. -1 indicates that
                          we pass through expression until no more substitutions can be made.
+            excluded - The classes (and its subclasses) to exclude substitution with expanded
+                       expressions for.
     
         Return:
             e - The expanded expression
     """
     
     e = expr
-    
+
     # Keep on passing through expression until no more substitutions can be made
     if num_passes == -1:
         done = False
         while not done:
             done = True
-            e, done = replace_with_expanded(e, done)
+            e, done = replace_with_expanded(e, done, excluded=excluded)
     else:
         for _ in range(num_passes):
-            e, _ = replace_with_expanded(e)
+            e, _ = replace_with_expanded(e, excluded=excluded)
         
     return e.doit().doit()
 
@@ -824,16 +851,25 @@ def _match_with_pat(expr, start, pat):
     
     len_expr = len(expr.args)
     matched, skipped = False, False
-    
+    #print("Pat: ", pat, type(pat))
+    #print("Expr: ", expr)
     if isinstance(pat, MatrixExpr):
+        if isinstance(pat, MatrixSymbol):
+            from symgp import SuperMatMul
+            pat = SuperMatMul(pat)
+
+        #print("Expr: ", expr)
         len_pat = len(pat.args)
         j = 0
         l = 0
         while j < len_pat and start + l + j < len_expr:
             if start + l + j >= len_expr:
                 break
-        
+
+            #print("Current expr: ", expr.args[start+l+j])
+            #print("current pat: ", pat.args[j])
             if (expr.args[start+l+j].doit() != pat.args[j].doit()):# or (sub_expr.args[i+l+j].match(k.args[j])):
+                #print("Not matched")
                 #foundMatch = False
                 # As additions may be stored in any order, we need to skip symbols so that we can match
                 # the pattern
@@ -842,39 +878,54 @@ def _match_with_pat(expr, start, pat):
                 else:
                     break
             else:
+                #print("Matched")
                 j += 1
         
         if j == len_pat:
             matched = True
+            #print("Matched full expr")
             
         if l > 0:
             skipped = True
         
         return matched, skipped
     elif isinstance(pat, Kernel):
-        K = pat
-        
+        #print("Kernel pat: ", pat)
         kern_vars = get_all_kernel_variables(expr)
         
         # Get all possible kernel patterns
         patterns = []
+        #print("kern_vars: ", kern_vars)
         for v1 in kern_vars:
-            patterns.extend([K(v1,v2) for v2 in kern_vars])
-        
+            patterns.extend([pat(v1,v2) for v2 in kern_vars])
+
+        # Sort patterns based on length of underlying expression
+        def sort_func(e):
+            e_full = e.to_full_expr()
+            if isinstance(e_full, MatrixSymbol):
+                return 1
+            else:
+                return len(e_full.args)
+
+        patterns = sorted(patterns, key=sort_func)[::-1]
+
+        #print("patterns: ", patterns)
+
         # Find a match in our list of patterns
-        for p in patterns:
-            matched_pat = p.to_full_expr()
-            repl = p
+        for i, p in enumerate(patterns):
+            #print("p: ",p," patterns[i]: ",patterns[i])
+            #print("p.expanded: ", p.expanded)
+            #print("p.to_full_expr(): ", p.to_full_expr())
             #print("expr, start: ", expr, start)
-            matched, skipped = _match_with_pat(expr,start,matched_pat)
-            #print("matched, skipped, matched_pat, repl: ", matched, skipped, matched_pat, repl)
+            #print("patterns: ", patterns)
+            #print("matched_pat: ", p.to_full_expr())
+            matched, skipped = _match_with_pat(expr, start, p.to_full_expr())
+            #print("matched, skipped, matched_pat, repl: ", matched, skipped, p.to_full_expr(), p)
             if matched:
-                break
-        
-        if matched:
-            return matched, skipped, matched_pat, repl
-        else:
-            return matched, skipped, None, None
+                return matched, skipped, p.to_full_expr(), p
+
+        return matched, skipped, None, None
+
             
     else:
         raise Exception("Invalid pattern 'pat': Must be a Kernel object or a MatrixExpr")
@@ -905,7 +956,7 @@ def _replace_with_Kernel(expr, kern):
     
     # Table used to build back tree. 
     #
-    # We pair a key of a sub_expression with an id 'k' that indicates sub_expr was the k'th entry into the table with either:
+    # We pair a key of a sub_expression with an id 'k' that indicates sub_expr was the k'th entry in the table with either:
     #
     #       - A list of (sub_expr.args[i], k) tuples indicating the keys from which to search for the
     #         next expressions in the tree in their correct order:
@@ -922,12 +973,14 @@ def _replace_with_Kernel(expr, kern):
     tree_table = defaultdict(list)
     
     if isinstance(kern,Kernel):
-        queue = deque(((expr, 0, 0),))
+        queue = deque(((expr, 0, 0),))    # Tuples of (expression, tree level, expression id)
     
         curr_id = 1  # An id to uniquely identify each sub-expression i.e. we can have similar expressions at the same level
         while len(queue) > 0:
             sub_expr, level, old_id = queue.pop()
-            
+
+            #print("sub_expr: {}, level: {}, old_id: {}".format(sub_expr, level, old_id))
+
             if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
                 isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
                 isinstance(sub_expr, SuperDiagMat) or isinstance(sub_expr, SuperBlockDiagMat)):
@@ -938,11 +991,14 @@ def _replace_with_Kernel(expr, kern):
             
                 i = 0
                 while i < len_sub_expr:
-                    j = 0
-                    l = 0    # Used when we need to skip over symbols e.g. for addition where we may need to match a subset of args.
-                
-                    matched, skipped, pattern, repl = _match_with_pat(sub_expr,i,kern)
-                    
+
+                    matched, skipped, pattern, repl = _match_with_pat(sub_expr, i, kern)
+
+                    #print("i: ", i)
+                    #print("Matched: {}, Skipped: {}, Pattern: {}, Repl: {}".format(
+                    #    matched, skipped, pattern, repl))
+
+
                     # Update 'tree_table'
                     if matched:  # Match found: Replace match with pattern
                         # Determine the level of the new replacement expression in the expression tree
@@ -953,7 +1009,8 @@ def _replace_with_Kernel(expr, kern):
         
                         queue.appendleft((repl, new_level, curr_id))
                                               
-                        # We need to re-order sub_expr - mainly for matches in MatAdds with remainders e.g. matching A in A + B + C
+                        # We need to re-order sub_expr - mainly for matches in MatAdds with
+                        # remainders e.g. matching A in A + B + C
                         if skipped:
                             old_sub_expr = sub_expr
                         
@@ -977,11 +1034,20 @@ def _replace_with_Kernel(expr, kern):
                         else:
                             # Check entry for sub_expr exists
                             tree_table[(sub_expr, level, old_id)].append((repl, new_level, curr_id))
-                        
-                          
-                        # Start after pattern     
-                        i += len(pattern.args)
+
+                        #print("Key: {}, Val: {}".format((sub_expr, level, old_id),
+                        #                                (repl, new_level, curr_id)))
+
+                        # Start after pattern
+                        if isinstance(pattern, MatrixSymbol):
+                            i += 1
+                        else:
+                            i += len(pattern.args)
+
                     else:
+                        #print("Key: {}, Val: {}".format((sub_expr, level, old_id),
+                        #                                (sub_expr.args[i], level+1, curr_id)))
+
                         queue.appendleft((sub_expr.args[i], level+1, curr_id))
                     
                         # Check entry for sub_expr exists
@@ -1000,6 +1066,13 @@ def _replace_with_Kernel(expr, kern):
     # Sort based on level in descending order
     sorted_tree_table = sorted(tree_table.items(), key=lambda elem: elem[0][1], reverse=True) 
 
+    #print("\n")
+
+    #for ele in sorted_tree_table:
+    #    print(ele)
+
+    #print("\n")
+
     # Create expression from table
     for p, c in sorted_tree_table:
     
@@ -1009,10 +1082,12 @@ def _replace_with_Kernel(expr, kern):
         else:
             # Create MatrixExpr using the elements in the value c, which is a list, for the key p and
             # then update 'tree_table'
-            tree_table[p] = type(p[0])(*[tree_table[e] for e in c])  
+            tree_table[p] = type(p[0])(*[tree_table[e] for e in c])
+
+        #print("p: {}, tree_table[p]: {}".format(p, tree_table[p]))
     
     subbed_expr = tree_table[sorted_tree_table[-1][0]]
-    
+
     return subbed_expr
               
 def replace(expr, rules):
@@ -1037,9 +1112,8 @@ def replace(expr, rules):
         Returns:
             The expression with the substitutions made.
     """
-        
-    from collections import deque
-    from symgp import SuperDiagMat, SuperBlockDiagMat, SuperMatAdd, SuperMatSymbol, Kernel
+
+    from symgp import Kernel
     
     # Get the full expression
     #full_expr = expand_to_fullexpr(expr)
@@ -1047,7 +1121,6 @@ def replace(expr, rules):
     
     # For each substitution rule, replace the corresponding sub-expression
     for r in rules:
-        
         if isinstance(r,Kernel):
             full_expr = _replace_with_Kernel(full_expr, r)
         elif isinstance(r,tuple) and isinstance(r[0],MatrixExpr) and isinstance(r[1],MatrixSymbol):
@@ -1105,8 +1178,7 @@ class matLatPrinter(LatexPrinter):
         #print("mat_type: ",mat_type)
         #print("expr: ",expr)
         name = expr.name
-        return r'\mathbf{'+expr.name+'}'
-        if (mat_type == 'mean' or mat_type == 'covar' or mat_type == 'invcovar' or
+        """if (mat_type == 'mean' or mat_type == 'covar' or mat_type == 'invcovar' or
             mat_type == 'natmean' or mat_type == 'precision'):
             dep_vars = expr.dep_vars
             cond_vars = expr.cond_vars
@@ -1151,7 +1223,8 @@ class matLatPrinter(LatexPrinter):
             if expr.name[-2:] == '_s':
                 return r'\mathbf{'+expr.name[:-2]+'}_{*}'
             else:
-                return r'\mathbf{'+expr.name+'}'
+                return r'\mathbf{'+expr.name+'}'"""
+        return r'\mathbf{' + expr.name + '}'
 
     def _print_SuperMatInverse(self, expr):
         return self._print(expr.args[0]) +'^{-1}'
@@ -1178,6 +1251,9 @@ class matLatPrinter(LatexPrinter):
             
     
     def _print_MVG(self, expr):
+        from symgp.kernels.kernel import KernelMatrix
+
+        excluded_classes = [KernelMatrix]
         
         # Form MVG name
         latex_name = r'\begin{align*}' + "\n"
@@ -1201,8 +1277,10 @@ class matLatPrinter(LatexPrinter):
             if expr.mean.blockform is not None:
                 mean_name = r'\left[\begin{smallmatrix}'
                 for i in range(len(expr.mean.blockform)-1):
-                    mean_name += self._print(expand_to_fullexpr(expr.mean.blockform[i]).doit())+r'\\'
-                mean_name += self._print(expand_to_fullexpr(expr.mean.blockform[-1]).doit())+r'\end{smallmatrix}\right]'
+                    mean_name += self._print(expand_to_fullexpr(
+                        expr.mean.blockform[i], excluded=excluded_classes).doit())+r'\\'
+                mean_name += self._print(expand_to_fullexpr(
+                    expr.mean.blockform[-1], excluded=excluded_classes).doit())+r'\end{smallmatrix}\right]'
             
             # Covariance
             covar_short_name = r'\mathbf{\Sigma}_{'+vars_name_pre+r'}'
@@ -1211,13 +1289,17 @@ class matLatPrinter(LatexPrinter):
                 covar_name = r'\left[\begin{smallmatrix}'
                 for i in range(len(expr.covar.blockform)-1):
                     for j in range(len(expr.covar.blockform[i])-1):
-                        covar_name += self._print(expand_to_fullexpr(expr.covar.blockform[i][j]).doit())+r'&'
-                    covar_name += self._print(expand_to_fullexpr(expr.covar.blockform[i][-1]).doit())+r'\\'
+                        covar_name += self._print(expand_to_fullexpr(
+                            expr.covar.blockform[i][j], excluded=excluded_classes).doit())+r'&'
+                    covar_name += self._print(expand_to_fullexpr(
+                        expr.covar.blockform[i][-1], excluded=excluded_classes).doit())+r'\\'
             
                 # Add last row
                 for j in range(len(expr.covar.blockform[-1])-1):
-                    covar_name += self._print(expand_to_fullexpr(expr.covar.blockform[-1][j]).doit())+r'&'
-                covar_name += self._print(expand_to_fullexpr(expr.covar.blockform[-1][-1]).doit())+r'\end{smallmatrix}\right]'
+                    covar_name += self._print(expand_to_fullexpr(
+                        expr.covar.blockform[-1][j], excluded=excluded_classes).doit())+r'&'
+                covar_name += self._print(expand_to_fullexpr(
+                    expr.covar.blockform[-1][-1], excluded=excluded_classes).doit())+r'\end{smallmatrix}\right]'
             
             # Write shortened distribution expression
             latex_name += vars_name_N + r';' + mean_short_name + r',' + covar_short_name + r'\right)\\'+"\n"
@@ -1225,9 +1307,11 @@ class matLatPrinter(LatexPrinter):
             
         else:
             mean_short_name = r'\mathbf{m}_{'+vars_name_pre+r'}'
-            mean_name = self._print(expand_to_fullexpr(expr.mean.expanded).doit()) if expr.mean.expanded is not None else ''
+            mean_name = self._print(expand_to_fullexpr(
+                expr.mean.expanded, excluded=excluded_classes).doit()) if expr.mean.expanded is not None else ''
             covar_short_name = r'\mathbf{\Sigma}_{'+vars_name_pre+r'}'
-            covar_name = self._print(expand_to_fullexpr(expr.covar.expanded).doit()) if expr.covar.expanded is not None else ''
+            covar_name = self._print(expand_to_fullexpr(
+                expr.covar.expanded, excluded=excluded_classes).doit()) if expr.covar.expanded is not None else ''
             
             # Write shortened distribution expression
             var_name_N = self._print(expr.variables[0])
@@ -1253,7 +1337,8 @@ class matLatPrinter(LatexPrinter):
         return r'\mathbf{0}'
     
     def _print_KernelMatrix(self, expr):
-        latex_name = r'\mathbf{'+expr.K_func.name+'}_{'+matLatex(expr.args[1])+','+matLatex(expr.args[2])+'}'
+        latex_name = r'\mathbf{'+expr.K.name+'}_{'+matLatex(expr.inputs[0])+','+\
+                     matLatex(expr.inputs[1])+'}'
         return latex_name
              
 def matLatex(expr, profile=None, **kwargs):
@@ -1347,8 +1432,8 @@ def expand_mat_sums(sums):
     if L == 1:
         return sums[0]
     terms = []
-    left = expand_mat_sums(sums[:L//2], debug).args
-    right = expand_mat_sums(sums[L//2:], debug).args
+    left = expand_mat_sums(sums[:L//2]).args
+    right = expand_mat_sums(sums[L//2:]).args
             
     terms = [a*b for a in left for b in right]
     added = SuperMatAdd(*terms)
@@ -1374,13 +1459,13 @@ def expand_matmul(expr):
         return expr
     else:
         if sums:
-            terms = expand_mat_sums(sums, debug).args
+            terms = expand_mat_sums(sums).args
                 
             args = []
             for term in terms:
                 t = term
                 if isinstance(t,MatrixExpr) and t.is_MatMul and any(a.is_MatAdd if isinstance(a,MatrixExpr) else False for a in t.args):
-                    t = expand_matmul(t, debug)
+                    t = expand_matmul(t)
                     
                 args.append(t)
             return SuperMatAdd(*args).doit()
@@ -1395,10 +1480,10 @@ def expand_matexpr(expr):
         
     if expr.is_MatAdd:
         args = []
-        args.extend([expand_matexpr(a, debug) if a.is_MatMul else a for a in expr.args])
+        args.extend([expand_matexpr(a) if a.is_MatMul else a for a in expr.args])
         return SuperMatAdd(*args).doit()
     elif expr.is_MatMul:
-        return expand_matmul(expr, debug).doit()
+        return expand_matmul(expr).doit()
     else:
         return expr.doit()
                             
@@ -1754,7 +1839,7 @@ def simplify(expr):
 
                         # Check if we can collect any symbols on simp_expr. If we can add to simps.
                         if isinstance(simp_expr, MatAdd):
-                            ends_of_expr_collection = get_ends(simp_expr,debug)
+                            ends_of_expr_collection = get_ends(simp_expr)
                                 
                             for ends_of_expr in ends_of_expr_collection:
                                 ends_dict_left = defaultdict(list)
@@ -1883,7 +1968,7 @@ def get_exprs_at_depth(expr, depths):
                     start, end = 0, 2
                 
                     while end < l:
-                        if (accept_inv_lemma(sub_expr,start,end, debug)):
+                        if (accept_inv_lemma(sub_expr,start,end)):
                             new_expr = type(sub_expr)(*sub_expr.args[start:end+1])
                             exprs_at_depths[level].append(new_expr)
                             break
@@ -1947,7 +2032,7 @@ def get_ends(expr):
         for end in ends_mmul:
             if isinstance(end,MatAdd):
                 rem = val[1]
-                match = [elem for elem in get_permutations(val[1],debug) if elem==end]
+                match = [elem for elem in get_permutations(val[1]) if elem==end]
                     
                 if len(match) > 1:
                     raise Exception("More than one match found: %s"%(match))
@@ -2056,10 +2141,10 @@ def get_all_kernel_variables(expr):
         sub_expr, level = stack.pop()
         
         if isinstance(sub_expr,KernelMatrix):
-            if sub_expr.args[1] not in kern_vars:
-                kern_vars.append(sub_expr.args[1])
-            if sub_expr.args[2] not in kern_vars:
-                kern_vars.append(sub_expr.args[2])
+            if sub_expr.inputs[0] not in kern_vars:
+                kern_vars.append(sub_expr.inputs[0])
+            if sub_expr.inputs[1] not in kern_vars:
+                kern_vars.append(sub_expr.inputs[1])
             
         if (isinstance(sub_expr, MatMul) or isinstance(sub_expr, MatAdd) or 
             isinstance(sub_expr, Inverse) or isinstance(sub_expr, Transpose) or
@@ -2190,208 +2275,849 @@ def get_variables(expr):
     
     return variables_in_expr
     
-    
+######### Other miscellaneous functions #########
+def create_distr_name(dep_vars=None, cond_vars=None) -> str:
+    """
+    Creates a name based on the given variables of a distribution and the variables it is
+    conditioned on
+    :param dep_vars: The random variables of a distribution. x in p(x|z)
+    :param cond_vars: The conditioned-on variables of a distribution. z in p(x|z)
+    :return: A string of the name.
+    """
+    name = ''
+
+    if dep_vars:
+        if not isinstance(dep_vars[0], list):
+            name += ','.join([v.name for v in dep_vars])
+        else:
+            dep_vars_x = dep_vars[0]
+            dep_vars_y = dep_vars[1]
+            name += ','.join([v.name for v in dep_vars_x + dep_vars_y])
+
+    if cond_vars:
+        name += '|' + ','.join([v.name for v in cond_vars])
+
+    return name
+
+
 ######## GUI lexer ########
-class diag_token:
-    def __init__(self, t):
-        self.value = t   # 'diag'|'blockdiag'|'blkdiag'
+class Token(object, metaclass=ABCMeta):
+    """
+    Abstract base class for parser tokens
+    """
+    def __init__(self, *args) -> None:
+        self.value = args[0]
 
-class operator_token:
-    def __init__(self, op):
-        self.value = op  # '+'|'-'|'*'
+    def __eq__(self, other: 'Token'):
+        return self.value == other.value
 
-class paren_token:
-    def __init__(self, t):
-        self.value = t   # ')'|'('|']'|'['|'{'|'}'
+    def __str__(self):
+        return self.value
 
-class mat_identifier_token:
-    def __init__(self, mat):
-        self.name = mat   # The name of the matrix variable identifier
+    def __repr__(self):
+        return type(self).__name__ + '(value=' + self.value + ')'
+        
+class DiagToken(Token):
 
-class vec_identifier_token:
-    def __init__(self, vec):
-        self.name = vec   # The name of the vector variable identifier
+    ALLOWED_VALUES = ['diag', 'blockdiag', 'blkdiag']
 
-class kernel_token:
-    def __init__(self, name, arg1, arg2):
-        self.name = name
+    def __init__(self, t : str) -> None:
+        """
+        Initialises token for diagonal symbols
+        :param t: The name of the token from the range - 'diag'|'blockdiag'|'blkdiag'
+        """
+        assert t in DiagToken.ALLOWED_VALUES, "t must be one of {}".format(
+            DiagToken.ALLOWED_VALUES)
+        super(DiagToken, self).__init__(t)
+
+class OperatorToken(Token):
+
+    ALLOWED_VALUES = ['+', '-', '*']
+
+    def __init__(self, op : str) -> None:
+        """
+        Initialises token for operator symbols
+        :param op: The name of the token from the range - '+'|'-'|'*'
+        """
+        assert op in OperatorToken.ALLOWED_VALUES, "op must be one of {}".format(
+            OperatorToken.ALLOWED_VALUES)
+        super(OperatorToken, self).__init__(op)
+
+class PlusToken(OperatorToken):
+
+    def __init__(self):
+        super().__init__('+')
+
+class MinusToken(OperatorToken):
+
+    def __init__(self):
+        super().__init__('-')
+
+class StarToken(OperatorToken):
+
+    def __init__(self):
+        super().__init__('*')
+
+class ParenToken(Token):
+
+    ALLOWED_VALUES = ['(', ')', '[', ']', '{', '}']
+
+    def __init__(self, paren : str) -> None:
+        """
+        Initialises token for parentheses symbols
+        :param paren: The name of the token from the range - ')'|'('|']'|'['|'{'|'}'
+        """
+        assert paren in ParenToken.ALLOWED_VALUES, "paren must be one of {}".format(
+            ParenToken.ALLOWED_VALUES)
+        super(ParenToken, self).__init__(paren)
+
+class LRoundParenToken(ParenToken):
+    def __init__(self):
+        super(LRoundParenToken, self).__init__('(')
+
+class RRoundParenToken(ParenToken):
+    def __init__(self):
+        super(RRoundParenToken, self).__init__(')')
+
+class LBoxParenToken(ParenToken):
+    def __init__(self):
+        super(LBoxParenToken, self).__init__('[')
+
+class RBoxParenToken(ParenToken):
+    def __init__(self):
+        super(RBoxParenToken, self).__init__(']')
+
+class LCurlyParenToken(ParenToken):
+    def __init__(self):
+        super(LCurlyParenToken, self).__init__('{')
+
+class RCurlyParenToken(ParenToken):
+    def __init__(self):
+        super(RCurlyParenToken, self).__init__('}')
+    
+class MatIdentifierToken(Token):
+    def __init__(self, mat : str) -> None:
+        """
+        Initialises token for matrix variable identifier symbols
+        :param mat: The name of the token. Must start with a upper case letter and only have
+        alphanumeric characters and/or '_'.
+        """
+        super(MatIdentifierToken, self).__init__(mat)
+
+class VecIdentifierToken(Token):
+    def __init__(self, vec : str) -> None:
+        """
+        Initialises token for vector variable identifier symbols
+        :param vec: The name of the token. Must start with a lower case letter and only have
+        alphanumeric characters and/or '_'.
+        """
+        super(VecIdentifierToken, self).__init__(vec)
+
+class KernelToken(Token):
+    def __init__(self, name : str, arg1 : str, arg2 : str) -> None:
+        """
+        Initialises token for kernel function symbols.
+        :param name: The kernel name. Can start with lower or upper case letters
+        :param arg1: The first argument of the kernel
+        :param arg2: The second argumnet of the kernel
+        """
+        super(KernelToken, self).__init__(name)
         self.arg1 = arg1
         self.arg2 = arg2
 
-class inv_token:
-    def __init__(self, mat):
-        self.sym = mat
+    def __eq__(self, other: Token):
+        return isinstance(other, KernelToken) and \
+               (self.value == other.value and self.arg1 == other.arg1 and self.arg2 == other.arg2)
 
-class trans_token:
-    def __init__(self, t):
-        self.sym = t
+    def __str__(self):
+        return self.value + '(' + self.arg1 + ',' + self.arg2 + ')'
 
-def get_tokens(expr, debug=False):
-    
-    expr = expr.replace(" ","")
-    if debug:
-        print("expr: ",expr)
-      
-    # Regex expressions
-    digit = re.compile(r"[0-9_]")
-    lower_char = re.compile(r"[a-z]")
-    upper_char = re.compile(r"[A-Z]")
-    operators = re.compile(r"\+|\-|\*")
-    diag_op = re.compile(r"diag|blkdiag|blockdiag")
-        
-    mat_identifier = re.compile(r"{1}(?:{0}|{1}|{2})*".format(\
-                            lower_char.pattern, upper_char.pattern, digit.pattern))
-    vec_identifier = re.compile(r"{0}(?:{0}|{1}|{2})*".format(\
-                            lower_char.pattern, upper_char.pattern, digit.pattern))
-        
-    kernel = re.compile(r"(?:{0}|{1})\((?:{2}|{3}),(?:{2}|{3})\)".format(\
-                            lower_char.pattern, upper_char.pattern, vec_identifier.pattern, mat_identifier.pattern))
-                                
-    inv_op = re.compile(r"(?:%s|%s)(?:\.I|\^\-1|\^\{\-1\})"%(\
-                            mat_identifier.pattern, kernel.pattern))
-    inv_op_grouped = re.compile(r"(%s|%s)(?:\.I|\^\-1|\^\{\-1\})"%(\
-                            mat_identifier.pattern, kernel.pattern))
-    trans_op = re.compile(r"(?:%s|%s|%s)(?:\.T|\'|\^t|\^T|\^\{t\}|\^\{T\})"%(\
-                            mat_identifier.pattern, vec_identifier.pattern, kernel.pattern))
-    trans_op_grouped = re.compile(r"(%s|%s|%s)(?:\.T|\'|\^t|\^T|\^\{t\}|\^\{T\})"%(\
-                            mat_identifier.pattern, vec_identifier.pattern, kernel.pattern))
-        
-    symbols = re.compile(r"{0}|{1}|{2}|{3}|{4}".format(\
-                            mat_identifier.pattern, vec_identifier.pattern, kernel.pattern,\
-                            trans_op.pattern, inv_op.pattern))
-        
-    expr_re = re.compile(r"^(?:({0})(\[))?(\()?({1})(\))?((?:(?:{2})\(?(?:{1})\)?)*)(\])?".format(\
-                            diag_op.pattern, symbols.pattern, operators.pattern))
-        
-    def match2Symbol(s):
+    def __repr__(self):
+        return type(self).__name__ + '(value=' + self.value + ', arg1=' + self.arg1 + ', arg2=' + \
+               self.arg2 + ')'
+
+class GroupToken(Token):
+    """
+    Groups the supplied tokens into a single token
+    """
+
+    def __init__(self, tokens: List[Token]):
         """
-            Determines whether expr matches to mat_identifier, vec_identifier, kernel
+        Initialises the token that groups a sequence of tokens together.
+        :param tokens: The list of tokens to group
         """
-            
+        super(GroupToken, self).__init__(tokens)
+
+    def tokens(self) -> List[Token]:
+        return self.value
+
+class InvToken(Token):
+
+    ALLOWED_VALUES = ['.I', '^-1', '^{-1}']
+
+    def __init__(self, op: str) -> None:
+        """
+        Initialises token representing the inverse operation.
+        :param op: Must be one of '.I', '^-1', '^{-1}'
+        """
+        assert op in InvToken.ALLOWED_VALUES, "op must be one of {}".format(
+            InvToken.ALLOWED_VALUES)
+        super(InvToken, self).__init__(op)
+
+class TransToken(Token):
+
+    ALLOWED_VALUES = ['.T', '\'', '^t', '^T', '^{t}', '^{T}']
+
+    def __init__(self, op : str) -> None:
+        """
+        Initialises token representing the inverse operation.
+        :param op: Must be one of ".T", "'", "^t", "^T", "^{t}", "^{T}".
+        """
+        assert op in TransToken.ALLOWED_VALUES, "op must be one of {}".format(
+            TransToken.ALLOWED_VALUES)
+        super(TransToken, self).__init__(op)
+
+def get_tokens(expr: str) -> List[Token]:
+    """
+    Converts a string expression into a list of tokens. An exception is raised
+    if the expression doesn't give a valid parse
+    :param expr: The expression which we want to turn into a list of tokens.
+    :return: The list of tokens
+    """
+
+    # Useful functions
+    def match_to_symbol(s: str) -> Optional[
+        Union[MatIdentifierToken, VecIdentifierToken, KernelToken]]:
+        """
+        Determines whether expr matches to mat_identifier, vec_identifier or kernel
+        :param s: The expression which we want to match
+        :return: A token if there is a match otherwise we return None
+        """
+
         if mat_identifier.fullmatch(s):
-            return mat_identifier_token(s)
+            return MatIdentifierToken(s)
         elif vec_identifier.fullmatch(s):
-            return vec_identifier_token(s)
+            return VecIdentifierToken(s)
         elif kernel.fullmatch(s):
-                
             # Break up 's' into the kernel name and the two arguments
             match = s.split("(")
             name = match[0]
-                
-            arg1, arg2 = match[1].strip(")").split(",")  
-           
-            return kernel_token(name, arg1, arg2)
+
+            arg1, arg2 = match[1].strip(")").split(",")
+
+            return KernelToken(name, arg1, arg2)
         else:
-            return None
-            
-        
+            return ValueError("Invalid string: {}. Should match regexes: {}, {} or {}".format(
+                s, mat_identifier.pattern, vec_identifier.pattern, kernel.pattern))
+
+    def match_to_mat_op(s: str) -> Optional[Union[TransToken, InvToken]]:
+        """
+        Determines whether s matches inv_sym or trans_sym
+        :param s: String to be matched
+        :return: A TransToken or InvToken depending on s
+        """
+        if inv_sym.fullmatch(s):
+            return InvToken(s)
+        elif trans_sym.fullmatch(s):
+            return TransToken(s)
+        else:
+            raise ValueError("Invalid string: {}. Should match regexes: {} or {}".format(s, inv_sym.pattern, trans_sym.pattern))
+
+    def make_paren_token(s: str) -> Optional[ParenToken]:
+        if s == '(':
+            return LRoundParenToken()
+        elif s == ')':
+            return RRoundParenToken()
+        elif s == '[':
+            return LBoxParenToken()
+        elif s == ']':
+            return RBoxParenToken()
+        elif s == '{':
+            return LCurlyParenToken()
+        elif s == '}':
+            return RCurlyParenToken()
+        else:
+            raise ValueError("Invalid paren token. Must be one of '(',')','[',']','{','}'. Provided: %s" % (s))
+
+    def make_operator_token(s: str) -> Optional[OperatorToken]:
+        if s == '+':
+            return PlusToken()
+        elif s == '-':
+            return MinusToken()
+        elif s == '*':
+            return StarToken()
+        else:
+            raise ValueError('Invalid token. Must be one of "+", "-" or "*". Specified: {}'.format(s))
+
+    # Remove meaningless spaces
+    expr = expr.replace(" ", "")
+
+    ## Regex expressions ##
+
+    # Low-level expressions
+    digit = re.compile(r"[0-9_]")
+    lower_char = re.compile(r"[a-z]")
+    upper_char = re.compile(r"[A-Z]")
+    operators = re.compile(r"[\+\-\*]")
+    diag_op = re.compile(r"diag|blkdiag|blockdiag")
+    inv_sym = re.compile(r"\.I|\^\-1|\^\{\-1\}")
+    trans_sym = re.compile(r"\.T|\'|\^t|\^T|\^\{t\}|\^\{T\}")
+
+    # Matrix and vectors
+    mat_identifier = re.compile(r"{1}(?:{0}|{1}|{2})*".format( \
+        lower_char.pattern, upper_char.pattern, digit.pattern))
+    vec_identifier = re.compile(r"{0}(?:{0}|{1}|{2})*".format( \
+        lower_char.pattern, upper_char.pattern, digit.pattern))
+
+    # Kernels
+    kernel = re.compile(r"(?:{0}|{1})\((?:{2}|{3}),(?:{2}|{3})\)".format( \
+        lower_char.pattern, upper_char.pattern, vec_identifier.pattern, mat_identifier.pattern))
+
+    # Matrices, vectors and kernels
+    symbols = re.compile(r"{0}|{1}|{2}".format(
+        mat_identifier.pattern, vec_identifier.pattern, kernel.pattern)
+    )
+
+    # Full expression to match
+    #expr_re = re.compile(
+    #    r"^(\()?(?:({0})(\[))?(\()?({1})((?:{3}|{4})|\)|\])?((?:{3}|{4})|\)|\])?((?:{3}|{4})|\)|\])?((?:(?:{2})\(?(?:(?:{0})\[)?(?:{1})(?:(?:{3}|{4})|\)|\])?(?:(?:{3}|{4})|\)|\])?(?:(?:{3}|{4})|\)|\])?)*)(\))?". \
+    #        format(diag_op.pattern, symbols.pattern, operators.pattern, inv_sym.pattern,
+    #               trans_sym.pattern))
+
+    expr_re = re.compile(
+        r"^(\()?(?:({0})(\[))?(\()?({1})((?:(?:[\)\]])?(?:{3}|{4})?)*)((?:(?:{2})\(?(?:(?:{0})\[)?(?:{1})(?:(?:[\)\]])?(?:{3}|{4})?)*)*)(\))?".\
+            format(diag_op.pattern, symbols.pattern, operators.pattern, inv_sym.pattern,
+                   trans_sym.pattern))
+
+
+    # First match first part of expression then recursively match remainder
     tokens = []
     expr_match = expr_re.fullmatch(expr)
     if expr_match:
         groups = expr_match.groups()
-        if debug:
-            print("groups: ", groups)
-            
-        if groups[0]: # diag_op
-            tokens.append(diag_token(groups[0]))
-        
-        if groups[1]: # '['
-            tokens.append(paren_token(groups[1]))
-            
-        if groups[2]: # '('
-            tokens.append(paren_token(groups[2]))
-            
-        if groups[3]: # mat_identifier|vec_identifier|kernel|inv_op|trans_op
-                
-            token = match2Symbol(groups[3])
-            
-            # token must be inv_op or trans_op
-            if not token:  
-                if trans_op.fullmatch(groups[3]):
-                    token = match2Symbol(trans_op_grouped.fullmatch(groups[3]).groups()[0])
-                    token = trans_token(token)
-                else: # inv_op.fullmatch(groups[2]):
-                    token = match2Symbol(inv_op_grouped.fullmatch(groups[3]).groups()[0])
-                    token = inv_token(token)
-                
-            tokens.append(token)
-            
-        if groups[4]: # ')'
-            tokens.append(paren_token(groups[4]))
-        
-            
-        right = groups[5]
-            
-        right_regex = re.compile(r"^({0})(\()?({1})(\))?((?:(?:{0})\(?(?:{1})\)?)*)\]?".format(\
-                                    operators.pattern, symbols.pattern))
+        #print("groups: ", groups)
+        if groups[0]:  # '('
+            tokens.append(LRoundParenToken())
+
+        if groups[1]:  # diag_op
+            tokens.append(DiagToken(groups[1]))
+
+        if groups[2]:  # '['
+            tokens.append(make_paren_token(groups[2]))
+
+        if groups[3]:  # '('
+            tokens.append(make_paren_token(groups[3]))
+
+        if groups[4]:  # mat_identifier|vec_identifier|kernel
+            tokens.append(match_to_symbol(groups[4]))
+
+        # Alternations between (inv_sym|trans_sym) and ]|)
+        #if groups[5]:  # ) | ]
+        #    tokens.append(make_paren_token(groups[5]))
+
+        #if groups[6]:  # inv_sym | trans_sym
+        #    tokens.append(match_to_mat_op(groups[6]))
+
+        close_expr = groups[5]
+        close_expr_pat = re.compile(r"([\)\]])?({0}|{1})?((?:[\)\]]?(?:{0}|{1})?)*)".format(
+            inv_sym.pattern, trans_sym.pattern))
+        while len(close_expr) > 0:
+            close_expr_groups = close_expr_pat.fullmatch(close_expr).groups()
+
+            if close_expr_groups[0]:  # ) | ]
+                tokens.append(make_paren_token(close_expr_groups[0]))
+
+            if close_expr_groups[1]:  # inv_sym | trans_sym
+                tokens.append(match_to_mat_op(close_expr_groups[1]))
+
+            close_expr = close_expr_groups[2]
+
+        # (inv_sym|trans_sym)|']'|')' (3 times)
+        #for i in range(5,8):
+        #    if groups[i]:
+        #        try:
+        #            token = make_paren_token(groups[i])
+        #        except ValueError:
+        #            token = match_to_mat_op(groups[i])
+
+        #        tokens.append(token)
+
+        ## Repeat for the rest of the expression
+        right = groups[6]  # The remainder of the expression if it exists excluding last bracket
+
+        #right_regex = re.compile(
+        #    r"^({0})(\()?(?:({4})(\[))?({1})((?:{2}|{3})|\)|\])?((?:{2}|{3})|\)|\])?((?:{2}|{3})|\)|\])?((?:(?:{0})\(?(?:(?:{4})\[)?(?:{1})(?:(?:{2}|{3})|\)|\])?(?:(?:{2}|{3})|\)|\])?(?:(?:{2}|{3})|\)|\])?)*)".format(\
+        #        operators.pattern, symbols.pattern, inv_sym.pattern, trans_sym.pattern,
+        #        diag_op.pattern))
+
+        right_regex = re.compile(
+            r"^({0})(\()?(?:({4})(\[))?({1})((?:(?:[\)\]])?(?:{2}|{3})?)*)((?:(?:{0})\(?(?:(?:{4})\[)?(?:{1})(?:(?:[\)\]])?(?:{2}|{3})?)*)*)".format( \
+                operators.pattern, symbols.pattern, inv_sym.pattern, trans_sym.pattern,
+                diag_op.pattern))
+
         while len(right) > 0:
             subgroups = right_regex.fullmatch(right).groups()
-            if debug:
-                print("right: ", right)
-                print("subgroups: ", subgroups)
-                
-            if subgroups[0]:
-                tokens.append(operator_token(subgroups[0]))
-                
-            if subgroups[1]:
-                tokens.append(paren_token(subgroups[1]))
-                
-            if subgroups[2]:
-                token = match2Symbol(subgroups[2])
-                
-                # token must be inv_op or trans_op
-                if not token:
-                    if trans_op.fullmatch(subgroups[2]):
-                        token = match2Symbol(trans_op_grouped.fullmatch(subgroups[2]).groups()[0])
-                        token = trans_token(token)
-                    else: # inv_op.fullmatch(groups[2]):
-                        token = match2Symbol(inv_op_grouped.fullmatch(subgroups[2]).groups()[0])
-                        token = inv_token(token)
-                
-                tokens.append(token)
-                
-            if subgroups[3]:
-                tokens.append(paren_token(subgroups[3]))
-                
-            right = subgroups[4]
-        
-        if groups[6]: # ']'
-            tokens.append(paren_token(groups[6]))
-        
+            #print("subgroups: ", subgroups)
+            if subgroups[0]:  # operators
+                tokens.append(make_operator_token(subgroups[0]))
+            else:
+                raise RuntimeError("Scanning error: Missing operator")
+
+            if subgroups[1]:  # '('
+                tokens.append(make_paren_token(subgroups[1]))
+
+            if subgroups[2]:  # 'diag_op'
+                tokens.append(DiagToken(subgroups[2]))
+
+            if subgroups[3]:  # '['
+                tokens.append(make_paren_token(subgroups[3]))
+
+            if subgroups[4]:  # mat_identifier|vec_identifier|kernel
+                tokens.append(match_to_symbol(subgroups[4]))
+            else:
+                raise RuntimeError("Scanning error: Missing mat_identifier, vec_identifier or kernel.")
+
+            # Alternations between (inv_sym|trans_sym) and ]|)
+            # if groups[5]:  # ) | ]
+            #    tokens.append(make_paren_token(groups[5]))
+
+            # if groups[6]:  # inv_sym | trans_sym
+            #    tokens.append(match_to_mat_op(groups[6]))
+
+            close_expr = subgroups[5]
+            close_expr_pat = re.compile(r"([\)\]])?({0}|{1})?((?:[\)\]]?(?:{0}|{1})?)*)".format(
+                inv_sym.pattern, trans_sym.pattern))
+            while len(close_expr) > 0:
+                close_expr_groups = close_expr_pat.fullmatch(close_expr).groups()
+
+                if close_expr_groups[0]:  # ) | ]
+                    tokens.append(make_paren_token(close_expr_groups[0]))
+
+                if close_expr_groups[1]:  # inv_sym | trans_sym
+                    tokens.append(match_to_mat_op(close_expr_groups[1]))
+
+                close_expr = close_expr_groups[2]
+
+            # (inv_sym|trans_sym)|']'|')' (3 times)
+            #for i in range(5, 8):
+            #    if subgroups[i]:
+            #        try:
+            #            token = make_paren_token(subgroups[i])
+            #        except ValueError:
+            #            token = match_to_mat_op(subgroups[i])
+            #
+            #        tokens.append(token)
+
+            right = subgroups[6]#[8]
+
+        if groups[7]:
+            tokens.append(RRoundParenToken())
+
         return tokens
-                    
     else:
         raise Exception("Invalid input")
-        
-def tokens2string(t, debug=False):
+
+def tokens_to_string(tokens : List[Token]) -> str:
+    """
+    Converts a list of tokens to the string they represent.
+    :param tokens: The ordered list of tokens
+    :return: The string representation of the list of tokens
+    """
     output = ""
-    for token in t:
-        if debug:
-            print("type(token): ", type(token))
-            
-        if isinstance(token, diag_token) or isinstance(token, operator_token) or isinstance(token, paren_token):
+    for token in tokens:    
+        if any([isinstance(token, token_class) for token_class in \
+                [DiagToken, OperatorToken, ParenToken, MatIdentifierToken, VecIdentifierToken]]):
             output += token.value
-        elif isinstance(token, mat_identifier_token) or isinstance(token, vec_identifier_token):
-            output += token.name
-        elif isinstance(token, inv_token) or isinstance(token, trans_token):
-            sym = token.sym
-            if isinstance(sym, kernel_token):
-                output += sym.name + "(" + sym.arg1 + "," + sym.arg2 + ")"
+        elif isinstance(token, InvToken) or isinstance(token, TransToken):
+            sym = token.value
+            if isinstance(sym, KernelToken):
+                output += sym.value + "(" + sym.arg1 + "," + sym.arg2 + ")"
+            elif isinstance(sym, GroupToken):
+                output += tokens_to_string(sym.tokens())
             else:
-                output += sym.name  
+                output += sym.value  
             
-            if isinstance(token, inv_token):
+            if isinstance(token, InvToken):
                 output += ".I"
             else:
-                output += ".T" 
-                    
+                output += ".T"
+        elif isinstance(token, GroupToken):
+            output += tokens_to_string(token.tokens())
         else:
-            output += token.name +"(" + token.arg1 + ","+ token.arg2 + ")"
-            
-        if debug:
-            print("output: ",output) 
-    return output    
+            output += token.value +"(" + token.arg1 + ","+ token.arg2 + ")"
+    return output
 
-        
-        
-    
+######## GUI AST classes ########
+
+## AST Printer stuff ##
+class VisitorBase(object, metaclass=ABCMeta):
+    """
+    Abstract class for Visitor from the Visitor pattern.
+    """
+    def visit_binary(self, binary: 'Binary'):
+        raise NotImplementedError()
+
+    def visit_unary(self, unary: 'Unary'):
+        raise NotImplementedError()
+
+    def visit_literal(self, literal: 'Literal'):
+        raise NotImplementedError()
+
+    def visit_kernel_literal(self, kern_lit: 'KernelLiteral'):
+        raise NotImplementedError()
+
+    def visit_grouping(self, grouping: 'Grouping'):
+        raise NotImplementedError()
+
+    def visit_diag(self, diag: 'Diag'):
+        raise NotImplementedError()
+
+    def visit_matop(self, matop: 'MatOp'):
+        raise NotImplementedError()
+
+class ASTPrinter(VisitorBase):
+
+    def print_ast(self, expr: 'ASTNode'):
+        return expr.accept(self)
+
+    def visit_binary(self, binary: 'Binary'):
+        return self.parenthesise(binary.operator, binary.left, binary.right)
+
+    def visit_unary(self, unary: 'Unary'):
+        return self.parenthesise(unary.operator, unary.right)
+
+    def visit_literal(self, literal: 'Literal'):
+        return self.parenthesise(literal.value)
+
+    def visit_kernel_literal(self, kern_lit: 'KernelLiteral'):
+        return self.parenthesise(kern_lit.name, kern_lit.arg1, kern_lit.arg2)
+
+    def visit_grouping(self, grouping: 'Grouping'):
+        return self.parenthesise("group", grouping.expr)
+
+    def visit_diag(self, diag: 'Diag'):
+        return self.parenthesise(diag.diag_op, diag.expr)
+
+    def visit_matop(self, matop: 'MatOp'):
+        return self.parenthesise(matop.mat_op, matop.expr)
+
+    def parenthesise(self, name: str, *exprs: Iterable['ASTNode']):
+        out_str = "( " + name
+
+        for expr in exprs:
+            out_str += " "
+            if isinstance(expr, ASTNode):
+                out_str += expr.accept(self)
+            else:
+                out_str += expr
+        out_str += ")"
+
+        return out_str
+
+## Node classes ##
+class ASTNode(object, metaclass=ABCMeta):
+
+    def __eq__(self, other):
+        if type(self) == type(other):
+            return all([self.__dict__[k] == other.__dict__[k] for k in self.__dict__.keys() if not k.startswith('_')])
+        return False
+
+    def accept(self, visitor: VisitorBase):
+        raise NotImplementedError("Should be implemented by subclasses.")
+
+class Binary(ASTNode):
+
+    def __init__(self, left, operator: OperatorToken, right):
+        self.left = left
+        self.operator = operator.value
+        self.right = right
+
+    def __str__(self):
+        return str(self.left) + self.operator + str(self.right)
+
+    def __repr__(self):
+        return "Binary(left={}, operator={}, right={}".format(self.left, self.operator, self.right) + ")"
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_binary(self)
+
+class Unary(ASTNode):
+
+    def __init__(self, operator: OperatorToken, right):
+        self.operator = operator.value
+        self.right = right
+
+    def __str__(self):
+        return self.operator + str(self.right)
+
+    def __repr__(self):
+        return "Unary(operator={}, right={})".format(self.operator, self.right)
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_unary(self)
+
+class Literal(ASTNode):
+
+    def __init__(self, value: str):
+        self.value = value
+
+    def __str__(self):
+        return self.value
+
+    def __repr__(self):
+        return "Literal(value={})".format(repr(self.value))
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_literal(self)
+
+class KernelLiteral(ASTNode):
+
+    def __init__(self, name: str, arg1: str, arg2: str):
+        self.name = name
+        self.arg1 = arg1
+        self.arg2 = arg2
+
+    def __str__(self):
+        return self.name + "(" + self.arg1 + ", " + self.arg2 + ")"
+
+    def __repr__(self):
+        return "KernelLiteral(name={}, arg1={}, arg2={})".format(self.name, self.arg1, self.arg2)
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_kernel_literal(self)
+
+class Grouping(ASTNode):
+
+    def __init__(self, expr):
+        self.expr = expr
+
+    def __str__(self):
+        return "(" + str(self.expr) + ")"
+
+    def __repr__(self):
+        return "Grouping(expr={})".format(self.expr)
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_grouping(self)
+
+class Diag(ASTNode):
+
+    def __init__(self, diag_op: DiagToken, expr):
+        self.diag_op = diag_op.value
+        self.expr = expr
+
+    def __repr__(self):
+        return "Diag(diag_op={}, expr={})".format(self.diag_op, self.expr)
+
+    def __str__(self):
+        return self.diag_op + "[" + str(self.expr) + "]"
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_diag(self)
+
+class MatOp(ASTNode):
+
+    def __init__(self, expr, mat_op: Union[InvToken, TransToken]):
+        self.expr = expr
+        self.mat_op = mat_op.value
+
+    def __repr__(self):
+        return "MatOp(expr={}, mat_op={})".format(self.expr, self.mat_op)
+
+    def __str__(self):
+        return str(self.expr) + self.mat_op
+
+    def accept(self, visitor: VisitorBase):
+        return visitor.visit_matop(self)
+
+
+# Parsing functions
+def parse(tokens):
+    """
+    Parses a list of tokens to produce an expression with a dictionary
+    of the objects created
+    """
+
+    current = 0   # Index of current token.
+
+    def previous() -> Token:
+        return tokens[current-1]
+
+    def advance() -> Token:
+        nonlocal current
+        if not is_at_end():
+            current += 1
+        return previous()
+
+    def peek() -> Token:
+        return tokens[current]
+
+    def is_at_end() -> bool:
+        return current == len(tokens)
+
+    def match(*token_types) -> bool:
+        for token_type in token_types:
+            if check(token_type):
+                advance()
+                return True
+        return False
+
+    def check(token_type) -> bool:
+        if is_at_end():
+            return False
+        return isinstance(peek(), token_type)
+
+    def consume(token_type, message: str) -> Token:
+        if check(token_type):
+            return advance()
+        raise error(peek(), message)
+
+    def error(token: Token, message: str):
+        return RuntimeError(message + " Actual: " + token.value)
+
+    def primary():
+        if match(MatIdentifierToken, VecIdentifierToken):
+            return Literal(previous().value)
+        elif match(KernelToken):
+            kern_tok = previous()  # type: KernelToken
+            return KernelLiteral(kern_tok.value, kern_tok.arg1, kern_tok.arg2)
+        elif match(LRoundParenToken):
+            expr = expression()
+            consume(RRoundParenToken, "Expect ')' after expression.")
+            return Grouping(expr)
+        elif match(DiagToken):
+            diag_op = previous()  # type: DiagToken
+            consume(LBoxParenToken, "Expect '[' after diag_op and before expression.")
+            expr = expression()
+            consume(RBoxParenToken, "Expect ']' after expression.")
+            return Diag(diag_op, expr)
+
+    def unary():
+        if match(MinusToken):
+            operator = previous()  # type: OperatorToken
+            right = unary()
+            out_expr = Unary(operator, right)
+        else:
+            out_expr = primary()
+
+        if match(TransToken, InvToken):
+            matop = previous()  # type: Union[TransToken, InvToken]
+            return MatOp(out_expr, matop)
+        else:
+            return out_expr
+
+    def multiplication():
+        expr = unary()
+
+        while match(StarToken):
+            operator = previous()  # type: OperatorToken
+            right = unary()
+            expr = Binary(expr, operator, right)
+
+        return expr
+
+    def addition():
+        expr = multiplication()
+        while match(PlusToken, MinusToken):
+            operator = previous()  # type: OperatorToken
+            right = multiplication()
+            expr = Binary(expr, operator, right)
+
+        return expr
+
+    def expression():
+        return addition()
+
+    return expression()
+
+def print_ast(ast: ASTNode):
+    ast_printer = ASTPrinter()
+    return ast_printer.print_ast(ast)
+
+# Interpreter
+class Interpreter(VisitorBase, metaclass=ABCMeta):
+
+    def __init__(self, namespace: Dict[str, Any]):
+        """
+        Initialises interpreter.
+        :param namespace: Dictionary mapping names to Python objects that are used to evaluate
+        expression. For example for a SymGP Constant named 'A', we would have the entry:
+
+                            namespace['A'] = Constant('A')
+
+        For Kernels, we have to append '_kern' to the Kernel name to distinguish it from matrix
+        symbols.
+
+        We assume in all the 'visit*' functions below that all the required objects have been defined
+        previously.
+        """
+        self._ns = namespace
+
+    def interpret(self, expr: ASTNode):
+        return self.evaluate(expr)
+
+    def evaluate(self, expr: ASTNode):
+        return expr.accept(self)
+
+    def visit_binary(self, expr: Binary):
+        left = self.evaluate(expr.left)
+        right = self.evaluate(expr.right)
+
+        if expr.operator == '+':
+            return left + right
+        elif expr.operator == '-':
+            return left - right
+        elif expr.operator == '*':
+            return left * right
+        else:
+            return None
+
+    def visit_unary(self, expr: Unary):
+        right = self.evaluate(expr.right)
+
+        if expr.operator == '-':
+            return -right
+        else:
+            return None
+
+    def visit_literal(self, expr: Literal):
+        return self._ns[expr.value]
+
+    def visit_kernel_literal(self, expr: KernelLiteral):
+        from symgp.kernels import Kernel
+
+        arg1, arg2 = self._ns[expr.arg1], self._ns[expr.arg2]
+        kern = self._ns[expr.name + '_kern']   # type: Kernel
+
+        return kern(arg1, arg2)
+
+    def visit_grouping(self, expr: Grouping):
+        return self.evaluate(expr.expr)
+
+    def visit_diag(self, expr: Diag):
+        from symgp.superexpressions.supermatbase import SuperMatBase
+        from symgp.superexpressions import SuperDiagMat, SuperBlockDiagMat
+
+        arg = self.evaluate(expr.expr)  # type: SuperMatBase
+
+        if expr.diag_op == 'diag':
+            return SuperDiagMat(arg)
+        elif expr.diag_op == 'blkdiag' or expr.diag_op == 'blockdiag':
+            return SuperBlockDiagMat(arg)
+        else:
+            return None
+
+    def visit_matop(self, expr: MatOp):
+        from symgp.superexpressions import SuperMatTranspose, SuperMatInverse
+
+        arg =  self.evaluate(expr.expr)
+
+        trans_ops = [".T", "'", "^t", "^T", "^{t}", '^{T}']
+        inv_ops = [".I", "^-1", "^{-1}"]
+
+        if expr.mat_op in trans_ops:
+            return SuperMatTranspose(arg)
+        elif expr.mat_op in inv_ops:
+            return SuperMatInverse(arg)
+        else:
+            return None

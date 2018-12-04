@@ -6,13 +6,12 @@ from sympy.strategies import (rm_id, unpack, typed, flatten, sort, condition, ex
 from .supermatbase import SuperMatBase
 
 class SuperMatMul(SuperMatBase, MatMul):
-    
+    """
+    Redefines some methods of MatMul so as to make them amenable to our application
+    """
+
     _op_priority = 10000
-    
-    """
-        Redefines some methods of MatMul so as to make them amenable to our application
-    """
-    
+
     def __new__(cls, *args, **kwargs):
         return MatMul.__new__(cls, *args, **kwargs)
     
@@ -21,7 +20,8 @@ class SuperMatMul(SuperMatBase, MatMul):
         return coeff, SuperMatMul(*matrices)
     
     def _eval_transpose(self):
-        return SuperMatMul(*[arg.T for arg in self.args[::-1]]).doit()
+        return SuperMatMul(*[arg.T if isinstance(arg, MatrixExpr) else arg
+                             for arg in self.args[::-1]]).doit()
     
     def _eval_inverse(self):
         try:
@@ -29,8 +29,12 @@ class SuperMatMul(SuperMatBase, MatMul):
                 arg.inverse() if isinstance(arg, MatrixExpr) else arg**-1
                     for arg in self.args[::-1]]).doit()
         except ShapeError:
-            from SuperMatExpr import SuperMatInverse
+            from .supermatexpr import SuperMatInverse
             return SuperMatInverse(self)
+
+    #def transpose(self):
+    #    from .supermatexpr import SuperMatTranspose
+    #    return SuperMatTranspose(self).doit()
     
     def doit(self, **kwargs):
         deep = kwargs.get('deep', True)

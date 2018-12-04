@@ -4,5 +4,6 @@
 
 from .supermatmul import SuperMatMul
 from .supermatadd import SuperMatAdd
-from .supermatexpr import (SuperMatSymbol, SuperMatInverse, SuperMatTranspose, SuperDiagMat, SuperBlockDiagMat,
-                           Variable, Mean, Covariance, Constant)
+from .supermatexpr import (SuperMatSymbol, SuperMatInverse, SuperMatTranspose, SuperDiagMat,
+                           SuperBlockDiagMat, Variable, CompositeVariable, Mean, Covariance,
+                           Constant)

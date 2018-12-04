@@ -1,175 +1,151 @@
-from sympy import MatrixSymbol, sympify, Basic, HadamardProduct, S
-from sympy.core.decorators import call_highest_priority
+from typing import Union, List
+from copy import copy
+
+from sympy import MatrixSymbol, Basic, HadamardProduct, Symbol, MatrixExpr
 
 from symgp.superexpressions.supermatbase import SuperMatBase
-from symgp.superexpressions import SuperMatInverse, SuperMatMul, SuperMatAdd
+from symgp.superexpressions.supermatexpr import SuperMatSymbol, Covariance, Variable, \
+    CompositeVariable
+from symgp.superexpressions import SuperMatInverse
 
-class KernelMatrix(SuperMatBase, MatrixSymbol):
-    
-    """
-        Symbolic realisation of a covariance function, K, with inputs X1, X2 i.e. K(X1, X2) 
-    
-        Args:
-            name - Name of matrix
-            m, n - Shape of matrix. Should satisfy m = inputs[0].shape[0], n = inputs[1].shape[1]
-            inputs - The two MatrixSymbols to evaluate this kernel for
-            kernel - The covariance function that this matrix corresponds to
-    """
-    
-    _op_priority = 10000
-    
-    def __new__(cls, name, m, n, inputs, kernel, expanded=None):
-        
-        if name == '':
-            name = kernel.name+'(' + ','.join([i.name for i in inputs]) + ')'
-        obj = Basic.__new__(cls,name,inputs[0],inputs[1])
-        
-        return obj
-    
-    def __init__(self, name, m, n, inputs, kernel, expanded=None):
-        
-        """
-            Initialize a KernelMatrix object
-        
-            Args:
-                name - Name of matrix
-                m, n - Shape of matrix. Should satisfy m = inputs[0].shape[0], n = inputs[1].shape[1]
-                inputs - The two MatrixSymbols to evaluate this kernel for
-                kernel - The covariance function that this matrix corresponds to
-        """
-        self.K_func = kernel
-        self.dep_vars = inputs
-        self.expanded = expanded
-        
-    def doit(self, **hints):
-        if hints.get('deep', True):
-            m, n = self.args[1].shape[0].doit(**hints), self.args[2].shape[0].doit(**hints)
-            return type(self)(self.name, m, n, [self.args[1].doit(**hints),
-                    self.args[2].doit(**hints)], self.K_func)
-        else:
-            return self
-    
-    @property
-    def shape(self):
-        return (self.args[1].shape[0], self.args[2].shape[0])
-     
-    def transpose(self):
-        if self.shape[0] == self.shape[1]:
-            return self
-        else:
-            return self.K_func(self.args[2],self.args[1])
-    
-    T = property(transpose, None, None, 'Matrix transposition.')
-    
-    def inverse(self):
-        return SuperMatInverse(self)
-    
-    I = property(inverse, None, None, 'Matrix inversion')
-    
-    def to_full_expr(self):
-        if self.expanded:
-            return self.expanded
-        else:
-            return self
-           
+
+Vector_t = List[MatrixExpr]
+Matrix_t = List[List[MatrixExpr]]
+
 class Kernel(object):
-    
     """
-        GP Kernel (covariance function) object.
+    GP Kernel (covariance function).
+
+    This class allows for composition of kernels using the standard mathematical operators '+',
+    '-' and '*'. When we do this, we create a new 
     """
+
+    ALLOWED_KERNEL_TYPES = ['nul', 'mul', 'sub', 'add']
         
-    def __init__(self, sub_kernels=[], kernel_type='nul', mat=None, name='K'):
+    def __init__(self, sub_kernels=None, kernel_type='nul', mat=None, name='K'):
         """
-            Initializes a Kernel object
-        
-            Args:
-                sub_kernels - A list of the constitutive addition/multiplicative Kernels
-                kernel_type - Specifies whether the component Kernels are multiplicative ('mul'), additive ('add'), subtractive ('sub') or 'nul' 
-                              indicating that there are no components i.e. this is a base kernel
-                mat - The centre matrix between kernels e.g. K(xi,xj) = K(xi,u)M_(u,u)K(u,xj) 
-                      where K are kernels and M is a matrix. M should be a SuperMatSymbol with one
-                      dependent_vars.
-                name - Name of the kernel
+        Initializes a Kernel object
+        :param sub_kernels: A list of the constitutive addition/multiplicative Kernels.
+        :param kernel_type: Specifies whether the component Kernels are multiplicative ('mul'),
+        additive ('add'), subtractive ('sub'). If ``sub_kernels`` isn't specified, then we
+        should leave this as `nul` indicating that there are no components i.e.
+        this is a base kernel.
+        :param mat: The centre matrix between kernels e.g. K(xi,xj) = K(xi,u)M_(u,u)K(u,xj).
+        where K are the sub_kernels and M is a matrix. M should be a SuperMatSymbol with one
+        ``dep_vars`` and ``kernel_type`` should be 'mul'.
+        :param name: Name of the kernel. Determines the name of the kernel when printed.
         """
+
+        assert kernel_type in Kernel.ALLOWED_KERNEL_TYPES, ("``kernel_type`` must be one of {}".
+            format(Kernel.ALLOWED_KERNEL_TYPES))
         
         # Check validity of arguments
-        if len(sub_kernels) != 2 or len(sub_kernels) != 0:
-            raise Exception("sub_kernels should have only two elements or be empty (for a base Kernel)")
-        
-        
-        self.sub_kernels = sub_kernels
-        self.type = kernel_type
-        self.M = mat
-        self.name = name
-            
+        if sub_kernels is not None and len(sub_kernels) != 2 and len(sub_kernels) != 0:
+            raise Exception("``sub_kernels`` should have only two elements or "
+                            "be empty (for a base ``Kernel``)")
+
+        if (sub_kernels is None and kernel_type != 'nul') or (sub_kernels is not None and
+                                                                  kernel_type == 'nul'):
+            raise Exception("If ``sub_kernels`` is ``None``, ``kernel_type`` should be ``nul`` "
+                            "and vice versa.")
+
+        # Check validity of mat
+        if mat is not None and isinstance(mat, SuperMatSymbol):
+            assert len(mat.dep_vars) == 1, "mat.dep_vars should have one element"
+            assert kernel_type == 'mul', "``kernel_type`` should be 'mul'"
+
+        self._sub_kernels = sub_kernels if sub_kernels is not None else []
+        self._type = kernel_type
+        self._M = mat
+        self._name = name
+
     def __call__(self, xi, xj):
-        return self.K(xi,xj)
-    
+        return self.K(xi, xj)
+
     def __repr__(self):
-        if self.M and self.type == 'mul':
-            return self.sub_kernels[0].__repr__() + '*{' + self.M.name + '}*'+self.sub_kernels[1].__repr__()
+        return "KernelMatrix(sub_kernels={},kernel_type={},mat={},name={})".format(
+            self.sub_kernels, self.type, self._M, self.name)
+
+    def __str__(self):
+        if self._M and self.type == 'mul':
+            return str(self.sub_kernels[0])+'*{'+self._M.name+'}*'+str(self.sub_kernels[1])
         elif self.type == 'add' or self.type == 'sub':
             lparen, rparen = '', '' 
             if len(self.sub_kernels) > 0:
                 lparen = '('
                 rparen = ')'
             sign = '+' if self.type == 'add' else '-'
-            return lparen+self.sub_kernels[0].__repr__() + sign + self.sub_kernels[1].__repr__()+rparen
+            return lparen + str(self.sub_kernels[0]) + sign + str(self.sub_kernels[1]) + rparen
         else:
             return self.name
-        
+    
+    # TODO: Find better naming convention    
     def __add__(self, other):
-        name = self.__repr__() + '+' + other.__repr__()
+        name = "K_{" + str(self) + '+' + str(other) + "}"
         return Kernel([self, other], 'add', name=name)
     
     def __radd__(self, other):
-        name = other.__repr__() + '+' + self.__repr__()
+        name = "K_{" + str(other) + '+' + str(self) + "}"
         return Kernel([other, self], 'add', name=name)
     
     def __sub__(self, other):
-        name = self.__repr__() + '-' + other.__repr__()
+        name = "K_{" + str(self) + '-' + str(other) + "}"
         return Kernel([self, other], 'sub', name=name)
     
     def __rsub__(self, other):
-        name = other.__repr__() + '-' + self.__repr__()
+        name = "K_{" + str(other) + '-' + str(self) + "}"
         return Kernel([other, self], 'sub', name=name)
         
     def __mul__(self, other):
-        name = self.__repr__() + '*' + other.__repr__()
+        name = "K_{" + str(self) + '*' + str(other) + "}"
         return Kernel([self, other], 'mul', name=name)
     
     def __rmul__(self, other):
-        name = other.__repr__() + '*' + self.__repr__()
+        name = "K_{" + str(other) + '*' + str(self) + "}"
         return Kernel([other, self], 'mul', name=name)
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def type(self):
+        return self._type
+
+    @property
+    def sub_kernels(self):
+        return self._sub_kernels
     
-    def K(self, xi, xj):
+    def K(self, xi: MatrixSymbol, xj: MatrixSymbol):
         """
-            Evaluate kernel for given inputs
-        
-            Args:
-                xi, xj - SuperMatSymbols of shapes (d, ni) and (d, nj) respectively where
-                         d is the dimension of each vector and ni, nj are the number of vectors
-        
-            Returns:
-                A KernelMatrix object that represents the covariance between the inputs
-                         
+        Evaluate kernel for given inputs.
+        :param xi: Kernel input of shape (N_i, D) where N_i is the number of data points and D is
+        the dimensionality.
+        :param xj: Kernel input of shape (N_j, D) where N_j is the number of data points and D is
+        the dimensionality.
+        :return: A KernelMatrix object that represents the covariance between the inputs. Of
+        shape (N_i, N_j)
         """
+
         if self.type == 'mul':
             left_kern = self.sub_kernels[0]
             right_kern = self.sub_kernels[1]
             
-            if self.M is not None:
-                u = self.M.dep_vars[0]
+            if self._M is not None:
+                u = self._M.dep_vars[0]
+
                 left_kern_mat = left_kern.K(xi,u)
                 right_kern_mat = right_kern.K(u,xj)
-                M = self.M if self.M.expanded is None else self.M.expanded
+                M = self.get_M()
+
                 expanded = left_kern_mat*M*right_kern_mat
             else:
                 left_kern_mat = left_kern.K(xi,xj)
                 right_kern_mat = right_kern.K(xi,xj)
+
                 expanded = HadamardProduct(left_kern_mat, right_kern_mat)
-            
-            return KernelMatrix('',xi.shape[0],xj.shape[0],inputs=[xi, xj],kernel=self,expanded=expanded)
+
+            return KernelMatrix(xi, xj, kernel=self, full_expr=expanded)
         elif self.type == 'add' or self.type == 'sub':
             left_kern = self.sub_kernels[0]
             right_kern = self.sub_kernels[1]
@@ -182,14 +158,57 @@ class Kernel(object):
             else:
                 expanded = left_kern_mat - right_kern_mat
             
-            return KernelMatrix('',xi.shape[0],xj.shape[0],inputs=[xi, xj],kernel=self,expanded=expanded)
+            return KernelMatrix(xi, xj, kernel=self, full_expr=expanded)
             
         else: # self.type == 'nul'
-            return KernelMatrix('',xi.shape[1],xj.shape[1],[xi, xj],kernel=self)
+            return KernelMatrix(xi, xj, kernel=self)
     
-    def get_M(self):
+    def get_M(self) -> SuperMatSymbol:
         """
-            Get the middle M matrix if it exists
+        Get the middle M matrix if it exists
         """
-        M = self.M if self.M.expanded is None else self.M.to_full_expr()
+        M = self._M if self._M.expanded is None else self._M.to_full_expr()
         return M
+
+class KernelMatrix(Covariance):
+    _op_priority = 10000  # Specifies the priority of this class in matrix operations
+
+    def __new__(cls, v1: Union[Variable, CompositeVariable], v2: Union[Variable, CompositeVariable],
+                kernel: Kernel, cond_vars: List[Union[Variable, CompositeVariable]] = None,
+                name: str = '', full_expr: Union[MatrixExpr, Matrix_t] = None):
+        inputs = [v1, v2]
+
+        if name == '':
+            name = kernel.name + '_{' + ','.join([i.name for i in inputs]) + '}'
+
+        return Covariance.__new__(cls, v1=v1, v2=v2, cond_vars=cond_vars, name=name,
+                                  full_expr=full_expr)
+
+
+    def __init__(self, v1: Union[Variable, CompositeVariable], v2: Union[Variable, CompositeVariable],
+                kernel: Kernel, cond_vars: List[Union[Variable, CompositeVariable]] = None,
+                name: str = '', full_expr: Union[MatrixExpr, Matrix_t] = None):
+        """
+        See ``__new__`` above.
+        """
+        assert v1.shape[1] == v2.shape[1], "Both inputs must have same dimensionality."
+        self._K = kernel
+        self._inputs = [v1, v2]
+        super(KernelMatrix, self).__init__(v1=v1, v2=v2, cond_vars=cond_vars, name=name,
+                                           full_expr=full_expr)
+
+    @property
+    def K(self):
+        return self._K
+
+    @property
+    def inputs(self):
+        return self._inputs
+
+    def transpose(self):
+        if self.shape[0] == self.shape[1]:
+            return self
+        else:
+            return self._K(self.dep_vars[1], self.dep_vars[0])
+
+    T = property(transpose, None, None, 'Matrix transposition.')

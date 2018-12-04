@@ -9,18 +9,21 @@ from sympy.utilities import default_sort_key, sift
 from .supermatbase import SuperMatBase
  
 class SuperMatAdd(SuperMatBase, MatAdd):
-    
+    """
+    Redefines some methods of MatAdd so as to make them amenable to our application
+    """
+
     _op_priority = 10000
-    
-    """
-        Redefines some methods of MatAdd so as to make them amenable to our application
-    """
-    
+
     def __new__(cls, *args, **kwargs):
         return MatAdd.__new__(cls, *args, **kwargs)
         
     def _eval_transpose(self):
         return SuperMatAdd(*[arg.T for arg in self.args]).doit()
+
+    #def transpose(self):
+    #    from .supermatexpr import SuperMatTranspose
+    #    return SuperMatTranspose(self).doit()
     
     def doit(self, **kwargs):
         deep = kwargs.get('deep', True)
