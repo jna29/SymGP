@@ -1,5 +1,7 @@
 # SymGP
-A symbolic algebra library for multivariate Gaussian and Gaussian process probabilistic models
+A symbolic algebra library for multivariate Gaussian and Gaussian process probabilistic models. 
+
+See final year report in
 
 ## Installation
 
