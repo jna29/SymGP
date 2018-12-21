@@ -1,6 +1,8 @@
 # SymGP
 A symbolic algebra library for multivariate Gaussian and Gaussian process probabilistic models. 
 
+See project report in `documents`.
+
 ## Installation
 
 Install from PyPi using the following command:
